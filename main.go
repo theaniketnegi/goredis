@@ -173,7 +173,6 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore) {
 				continue
 			}
 
-			fmt.Println(expiry)
 			conn.Write([]byte(store.Set(args[0], args[1], expiry, nx, xx, ttl, get)))
 		case "TTL":
 			if len(args) != 1 {
@@ -191,7 +190,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore) {
 				conn.Write([]byte(":-1\r\n"))
 				continue
 			}
-			fmt.Println(time.Until(*storeVal.Expiry).Seconds())
+
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", int64(time.Until(*storeVal.Expiry).Seconds())))
 		default:
 			conn.Write([]byte("+PONG\r\n"))

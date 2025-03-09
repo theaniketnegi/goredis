@@ -21,11 +21,25 @@ func NewInMemoryStore() *InMemoryStore {
 	}
 }
 
+func hasExpired(expiry *time.Time) bool {
+	if expiry == nil {
+		return false
+	}
+
+	timeLeft := int64(time.Until(*expiry).Seconds())
+
+	return timeLeft <= 0
+}
+
 func (s *InMemoryStore) Get(key string) (StoreValue, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	value, ok := s.storage[key]
+
+	if hasExpired(value.Expiry) {
+		return StoreValue{}, false
+	}
 
 	return value, ok
 }
@@ -35,7 +49,9 @@ func (s *InMemoryStore) Set(key string, value string, expiry *time.Time, nx bool
 	defer s.mu.Unlock()
 
 	oldVal, ok := s.storage[key]
-
+	if hasExpired(oldVal.Expiry) {
+		ok = false
+	}
 	if nx && ok {
 		return "_\r\n"
 	}
@@ -45,7 +61,11 @@ func (s *InMemoryStore) Set(key string, value string, expiry *time.Time, nx bool
 	}
 
 	if ttl {
-		expiry = oldVal.Expiry
+		if !ok {
+			expiry = nil
+		} else {
+			expiry = oldVal.Expiry
+		}
 	}
 
 	s.storage[key] = StoreValue{Value: value, Expiry: expiry}

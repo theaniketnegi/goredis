@@ -25,11 +25,13 @@ func NewPersistence(kvStore *InMemoryStore, fileDir string) (*Persistence, error
 		lastSaveTime:   0,
 	}
 
-	err := p.loadFileData()
+	defer func() {
+		if info, err := os.Stat(fileDir); err == nil {
+			p.lastSaveTime = info.ModTime().Unix()
+		}
+	}()
 
-	if info, err := os.Stat(fileDir); err == nil {
-		p.lastSaveTime = info.ModTime().Unix()
-	}
+	err := p.loadFileData()
 
 	if errors.Is(err, os.ErrNotExist) {
 		dir := filepath.Dir(fileDir)

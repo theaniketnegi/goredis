@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -14,7 +15,10 @@ import (
 	"github.com/theaniketnegi/goredis/store"
 )
 
-func connectionHandler(conn net.Conn, store *store.InMemoryStore) {
+var dir = flag.String("dir", "/tmp/redis-data", "Directory to store RDB file")
+var dbFilename = flag.String("dbfilename", "dump.rdb", "RDB File")
+
+func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *store.Persistence) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
@@ -192,6 +196,27 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore) {
 			}
 
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", int64(time.Until(*storeVal.Expiry).Seconds())))
+		case "CONFIG":
+			if len(args) == 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'config' command\r\n"))
+				continue
+			}
+			if len(args) == 1 && args[0] == "GET" {
+				conn.Write([]byte("-ERR wrong number of arguments for 'config|get' command\r\n"))
+				continue
+			}
+
+			if args[0] == "GET" {
+				if args[1] == "dir" {
+					conn.Write([]byte(fmt.Sprintf("*2\r\n$3\r\ndir\r\n$%d\r\n%s\r\n", len(*dir), *dir)))
+				} else if args[1] == "dbfilename" {
+					conn.Write([]byte(fmt.Sprintf("*2\r\n$10\r\ndbfilename\r\n$%d\r\n%s\r\n", len(*dbFilename), *dbFilename)))
+				} else {
+					conn.Write([]byte("*0\r\n"))
+				}
+			} else {
+				conn.Write([]byte("*0\r\n"))
+			}
 		default:
 			conn.Write([]byte("+PONG\r\n"))
 		}
@@ -199,9 +224,15 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore) {
 }
 
 func main() {
+	flag.Parse()
 	listener, err := net.Listen("tcp", ":6380")
 
+	if err != nil {
+		panic(err)
+	}
+
 	memStore := store.NewInMemoryStore()
+	persistence, err := store.NewPersistence(memStore, fmt.Sprintf("%s/%s", *dir, *dbFilename))
 
 	if err != nil {
 		panic(err)
@@ -215,6 +246,6 @@ func main() {
 			panic(err)
 		}
 
-		go connectionHandler(conn, memStore)
+		go connectionHandler(conn, memStore, persistence)
 	}
 }

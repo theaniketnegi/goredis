@@ -13,6 +13,7 @@ type Persistence struct {
 	persistentFile string
 	mu             sync.Mutex
 	memory         *InMemoryStore
+	isBGSaving     bool
 }
 
 func NewPersistence(kvStore *InMemoryStore, fileDir string) (*Persistence, error) {
@@ -73,6 +74,10 @@ func (p *Persistence) Save() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.isBGSaving {
+		return errors.New("another save in progress")
+	}
+
 	persistentFileDir := filepath.Dir(p.persistentFile)
 	tmpfile, err := os.CreateTemp(persistentFileDir, filepath.Base(p.persistentFile))
 	if err != nil {
@@ -94,5 +99,24 @@ func (p *Persistence) Save() error {
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+func (p *Persistence) BGSave() error {
+	p.mu.Lock()
+
+	if p.isBGSaving {
+		p.mu.Unlock()
+		return errors.New("background save is already running")
+	}
+	p.isBGSaving = true
+	p.mu.Unlock()
+
+	go func() {
+		p.mu.Lock()
+		p.isBGSaving = false
+		p.mu.Unlock()
+		p.Save()
+	}()
 	return nil
 }

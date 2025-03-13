@@ -245,6 +245,20 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			conn.Write([]byte("+OK\r\n"))
+		case "BGSAVE":
+			if len(args) != 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'bgsave' command\r\n"))
+				continue
+			}
+
+			err := persistence.BGSave()
+
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+
+			conn.Write([]byte("+OK\r\n"))
 		default:
 			conn.Write([]byte("+PONG\r\n"))
 		}

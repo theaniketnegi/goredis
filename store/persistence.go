@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 type Persistence struct {
@@ -14,15 +15,21 @@ type Persistence struct {
 	mu             sync.Mutex
 	memory         *InMemoryStore
 	isBGSaving     bool
+	lastSaveTime   int64
 }
 
 func NewPersistence(kvStore *InMemoryStore, fileDir string) (*Persistence, error) {
 	p := &Persistence{
 		persistentFile: fileDir,
 		memory:         kvStore,
+		lastSaveTime:   0,
 	}
 
 	err := p.loadFileData()
+
+	if info, err := os.Stat(fileDir); err == nil {
+		p.lastSaveTime = info.ModTime().Unix()
+	}
 
 	if errors.Is(err, os.ErrNotExist) {
 		dir := filepath.Dir(fileDir)
@@ -99,6 +106,8 @@ func (p *Persistence) Save() error {
 	if err != nil {
 		return err
 	}
+
+	p.lastSaveTime = time.Now().Unix()
 	return nil
 }
 
@@ -119,4 +128,11 @@ func (p *Persistence) BGSave() error {
 		p.Save()
 	}()
 	return nil
+}
+
+func (p *Persistence) LastSave() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.lastSaveTime
 }

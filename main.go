@@ -208,9 +208,9 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 
 			if args[0] == "GET" {
 				if args[1] == "dir" {
-					conn.Write([]byte(fmt.Sprintf("*2\r\n$3\r\ndir\r\n$%d\r\n%s\r\n", len(*dir), *dir)))
+					conn.Write(fmt.Appendf(nil, "*2\r\n$3\r\ndir\r\n$%d\r\n%s\r\n", len(*dir), *dir))
 				} else if args[1] == "dbfilename" {
-					conn.Write([]byte(fmt.Sprintf("*2\r\n$10\r\ndbfilename\r\n$%d\r\n%s\r\n", len(*dbFilename), *dbFilename)))
+					conn.Write(fmt.Appendf(nil, "*2\r\n$10\r\ndbfilename\r\n$%d\r\n%s\r\n", len(*dbFilename), *dbFilename))
 				} else {
 					conn.Write([]byte("*0\r\n"))
 				}
@@ -259,6 +259,13 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			conn.Write([]byte("+OK\r\n"))
+		case "LASTSAVE":
+			if len(args) != 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'lastsave' command\r\n"))
+				continue
+			}
+
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", persistence.LastSave()))
 		default:
 			conn.Write([]byte("+PONG\r\n"))
 		}

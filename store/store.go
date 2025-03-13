@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 )
@@ -11,13 +12,13 @@ type StoreValue struct {
 	Expiry *time.Time
 }
 type InMemoryStore struct {
-	storage map[string]StoreValue
+	Storage map[string]StoreValue
 	mu      sync.RWMutex
 }
 
 func NewInMemoryStore() *InMemoryStore {
 	return &InMemoryStore{
-		storage: make(map[string]StoreValue),
+		Storage: make(map[string]StoreValue),
 	}
 }
 
@@ -35,7 +36,7 @@ func (s *InMemoryStore) Get(key string) (StoreValue, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	value, ok := s.storage[key]
+	value, ok := s.Storage[key]
 
 	if hasExpired(value.Expiry) {
 		return StoreValue{}, false
@@ -48,7 +49,7 @@ func (s *InMemoryStore) Set(key string, value string, expiry *time.Time, nx bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	oldVal, ok := s.storage[key]
+	oldVal, ok := s.Storage[key]
 	if hasExpired(oldVal.Expiry) {
 		ok = false
 	}
@@ -68,7 +69,7 @@ func (s *InMemoryStore) Set(key string, value string, expiry *time.Time, nx bool
 		}
 	}
 
-	s.storage[key] = StoreValue{Value: value, Expiry: expiry}
+	s.Storage[key] = StoreValue{Value: value, Expiry: expiry}
 	if get {
 		if ok {
 			return fmt.Sprintf("$%d\r\n%s\r\n", len(oldVal.Value), oldVal.Value)
@@ -78,4 +79,17 @@ func (s *InMemoryStore) Set(key string, value string, expiry *time.Time, nx bool
 	}
 
 	return "+OK\r\n"
+}
+
+func (s *InMemoryStore) GetKeys(pattern string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var matchedKeys []string
+	for k := range s.Storage {
+		if match, _ := regexp.MatchString(pattern, k); match {
+			matchedKeys = append(matchedKeys, k)
+		}
+	}
+
+	return matchedKeys
 }

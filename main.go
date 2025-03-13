@@ -15,8 +15,8 @@ import (
 	"github.com/theaniketnegi/goredis/store"
 )
 
-var dir = flag.String("dir", "/tmp/redis-data", "Directory to store RDB file")
-var dbFilename = flag.String("dbfilename", "dump.rdb", "RDB File")
+var dir = flag.String("dir", "/tmp/redis-data", "Directory to store godb file")
+var dbFilename = flag.String("dbfilename", "dump.godb", "godb file")
 
 func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *store.Persistence) {
 	defer conn.Close()
@@ -217,6 +217,34 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			} else {
 				conn.Write([]byte("*0\r\n"))
 			}
+		case "KEYS":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'keys' command\r\n"))
+				return
+			}
+			pattern := args[0]
+			matchedKeys := store.GetKeys(parsePattern(pattern))
+
+			var resp strings.Builder
+
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(matchedKeys)))
+
+			for _, key := range matchedKeys {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(key), key))
+			}
+			conn.Write([]byte(resp.String()))
+		case "SAVE":
+			if len(args) != 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'save' command\r\n"))
+				continue
+			}
+
+			err := persistence.Save()
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write([]byte("+OK\r\n"))
 		default:
 			conn.Write([]byte("+PONG\r\n"))
 		}

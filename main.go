@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,10 +14,21 @@ import (
 
 	"github.com/theaniketnegi/goredis/parser"
 	"github.com/theaniketnegi/goredis/store"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 var dir = flag.String("dir", "/tmp/redis-data", "Directory to store godb file")
 var dbFilename = flag.String("dbfilename", "dump.godb", "godb file")
+var port = flag.Uint("port", 6380, "define port")
+var replicaOf = flag.String("replicaof", "", "Replicate to another server (<master_host master_port>)")
+var info map[string]map[string]any = map[string]map[string]any{
+	"replication": {
+		"role":               "master",
+		"master_replid":      "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+		"master_repl_offset": "0",
+	},
+}
 
 func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *store.Persistence) {
 	defer conn.Close()
@@ -266,6 +278,43 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", persistence.LastSave()))
+		case "INFO":
+			c := cases.Title(language.English)
+			if len(args) == 0 {
+				var resp strings.Builder
+				i := 0
+				for k, v := range info {
+					resp.WriteString(fmt.Sprintf("# %s\r\n", c.String(k)))
+					for ck, cv := range v {
+						resp.WriteString(fmt.Sprintf("%s:%s\r\n", ck, cv))
+					}
+					if i != len(info)-1 {
+						resp.WriteString("\r\n")
+					}
+					i++
+				}
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(resp.String()), resp.String()))
+				continue
+			}
+
+			var resp strings.Builder
+			for idx, arg := range args {
+				if _, ok := info[strings.ToLower(arg)]; !ok {
+					continue
+				}
+
+				resp.WriteString(fmt.Sprintf("# %s\r\n", c.String(strings.ToLower(arg))))
+
+				for ck, cv := range info[strings.ToLower(arg)] {
+					resp.WriteString(fmt.Sprintf("%s:%s\r\n", ck, cv))
+				}
+
+				if idx != len(args)-1 {
+					resp.WriteString("\r\n")
+				}
+			}
+			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(resp.String()), resp.String()))
+
 		default:
 			conn.Write([]byte("+PONG\r\n"))
 		}
@@ -274,7 +323,23 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 
 func main() {
 	flag.Parse()
-	listener, err := net.Listen("tcp", ":6380")
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+
+	if *replicaOf != "" {
+		hostPortArr := strings.Split(*replicaOf, " ")
+		if len(hostPortArr) != 2 {
+			panic(errors.New("invalid host/port passed"))
+		}
+
+		if err := validateHost(hostPortArr[0]); err != nil {
+			panic(err)
+		}
+
+		if err := validatePort(hostPortArr[1]); err != nil {
+			panic(err)
+		}
+		info["replication"]["role"] = "slave"
+	}
 
 	if err != nil {
 		panic(err)

@@ -314,16 +314,88 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				}
 			}
 			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(resp.String()), resp.String()))
+		case "REPLCONF":
+			if len(args) > 0 {
+				if strings.ToLower(args[0]) == "listening-port" {
+					if len(args) < 1 {
+						conn.Write([]byte("-ERR Syntax error\r\n"))
+						continue
+					}
+					conn.Write([]byte("+OK\r\n"))
+					continue
+				}
 
+				if strings.ToLower(args[0]) == "capa" {
+					if len(args) < 1 {
+						conn.Write([]byte("-ERR Syntax error\r\n"))
+						continue
+					}
+					conn.Write([]byte("+OK\r\n"))
+					continue
+				}
+				conn.Write([]byte("-ERR Syntax error\r\n"))
+				continue
+			}
+			conn.Write([]byte("+OK\r\n"))
+
+		case "PSYNC":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'psync' command\r\n"))
+				continue
+			}
+
+			fileContents, err := persistence.LoadFileContents()
+			if err != nil {
+				conn.Write(fmt.Appendf(nil, "-ERR %s\r\n", err.Error()))
+				continue
+			}
+
+			conn.Write(fmt.Appendf(nil, "$%d\r\n%s", len(fileContents), fileContents))
 		default:
 			conn.Write([]byte("+PONG\r\n"))
 		}
 	}
 }
 
+func sendHandshake(masterHost string, masterPort string, persistence *store.Persistence) {
+	conn, err := net.Dial("tcp", net.JoinHostPort(masterHost, masterPort))
+
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	conn.Write([]byte("*1\r\n$4\r\nping\r\n"))
+	reader.ReadString('\n')
+	conn.Write(fmt.Appendf(nil, "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n%d\r\n", *port))
+	reader.ReadString('\n')
+	conn.Write(fmt.Appendf(nil, "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"))
+	reader.ReadString('\n')
+	conn.Write([]byte("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"))
+
+	_, content, _ := parser.ParseRDBMessage(reader)
+	if err := persistence.LoadDataFromFile(content); err != nil {
+		return
+	}
+}
+
 func main() {
 	flag.Parse()
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+
+	if err != nil {
+		panic(err)
+	}
+
+	defer listener.Close()
+
+	memStore := store.NewInMemoryStore()
+	persistence, err := store.NewPersistence(memStore, fmt.Sprintf("%s/%s", *dir, *dbFilename))
+
+	if err != nil {
+		panic(err)
+	}
 
 	if *replicaOf != "" {
 		hostPortArr := strings.Split(*replicaOf, " ")
@@ -339,20 +411,8 @@ func main() {
 			panic(err)
 		}
 		info["replication"]["role"] = "slave"
+		sendHandshake(hostPortArr[0], hostPortArr[1], persistence)
 	}
-
-	if err != nil {
-		panic(err)
-	}
-
-	memStore := store.NewInMemoryStore()
-	persistence, err := store.NewPersistence(memStore, fmt.Sprintf("%s/%s", *dir, *dbFilename))
-
-	if err != nil {
-		panic(err)
-	}
-
-	defer listener.Close()
 
 	for {
 		conn, err := listener.Accept()

@@ -1,11 +1,13 @@
 package store
 
 import (
+	"bytes"
 	"encoding/gob"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,6 +60,43 @@ func NewPersistence(kvStore *InMemoryStore, fileDir string) (*Persistence, error
 	return p, nil
 }
 
+func (p *Persistence) LoadFileContents() (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	file, err := os.Open(p.persistentFile)
+
+	if err != nil {
+		return "", err
+	}
+
+	var b bytes.Buffer
+	_, err = b.ReadFrom(file)
+
+	if err != nil {
+		return "", err
+	}
+
+	return b.String(), nil
+}
+
+func (p *Persistence) LoadDataFromFile(content string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	rdr := strings.NewReader(content)
+	dec := gob.NewDecoder(rdr)
+	err := dec.Decode(p.memory)
+
+	if err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func (p *Persistence) loadFileData() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -92,7 +131,7 @@ func (p *Persistence) Save() error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(persistentFileDir + "/" + tmpfile.Name())
+	defer os.Remove(tmpfile.Name())
 
 	encoder := gob.NewEncoder(tmpfile)
 	err = encoder.Encode(p.memory)
@@ -103,8 +142,7 @@ func (p *Persistence) Save() error {
 	}
 
 	tmpfile.Close()
-
-	err = os.Rename(persistentFileDir+"/"+tmpfile.Name(), p.persistentFile)
+	err = os.Rename(tmpfile.Name(), p.persistentFile)
 	if err != nil {
 		return err
 	}

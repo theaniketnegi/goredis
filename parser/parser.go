@@ -3,6 +3,7 @@ package parser
 import (
 	"bufio"
 	"errors"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -55,4 +56,26 @@ func ParseRESP(reader *bufio.Reader) (string, []string, error) {
 		return strings.ToUpper(args[0]), args[1:], nil
 	}
 	return "", nil, nil
+}
+
+func ParseRDBMessage(reader *bufio.Reader) (int, string, error) {
+	b, err := reader.ReadString('\n')
+	if err != nil {
+		return 0, "", err
+	}
+
+	line := strings.TrimSpace(b)
+
+	fileLength, err := strconv.Atoi(line[1:])
+	if err != nil {
+		return 0, "", err
+	}
+
+	content := make([]byte, fileLength)
+	_, err = io.ReadFull(reader, content)
+	if err != nil {
+		return 0, "", err
+	}
+
+	return fileLength, string(content), nil
 }

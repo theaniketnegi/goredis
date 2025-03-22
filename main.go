@@ -29,6 +29,7 @@ var info map[string]map[string]any = map[string]map[string]any{
 		"master_repl_offset": "0",
 	},
 }
+var slaves []*net.Conn
 
 func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *store.Persistence) {
 	defer conn.Close()
@@ -47,6 +48,11 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 		}
 
 		fmt.Printf("COMMAND: %q, ARGS: %v\n", command, args)
+		if info["replication"]["role"] == "slave" && !readOnlyCommands(command) {
+			conn.Write([]byte("-READONLY You can't write against a read only replica.\r\n"))
+			continue
+		}
+
 		switch command {
 		case "PING":
 			if len(args) == 1 {
@@ -190,6 +196,12 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			conn.Write([]byte(store.Set(args[0], args[1], expiry, nx, xx, ttl, get)))
+			for _, slave := range slaves {
+				_, err := (*slave).Write(convertCmdToResp(command, args))
+				if err != nil {
+					fmt.Print(err)
+				}
+			}
 		case "TTL":
 			if len(args) != 1 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'ttl' command\r\n"))
@@ -343,7 +355,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				conn.Write([]byte("-ERR wrong number of arguments for 'psync' command\r\n"))
 				continue
 			}
-
+			slaves = append(slaves, &conn)
 			fileContents, err := persistence.LoadFileContents()
 			if err != nil {
 				conn.Write(fmt.Appendf(nil, "-ERR %s\r\n", err.Error()))
@@ -357,13 +369,128 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 	}
 }
 
-func sendHandshake(masterHost string, masterPort string, persistence *store.Persistence) {
+func handleSlaveCommands(conn net.Conn, store *store.InMemoryStore, _ *store.Persistence) {
+	reader := bufio.NewReader(conn)
+
+	for {
+		command, args, err := parser.ParseRESP(reader)
+		fmt.Printf("[FROM MASTER] COMMAND: %q, ARGS: %v\n", command, args)
+
+		if err != nil {
+			if err == io.EOF {
+				fmt.Println("Connection closed.")
+				return
+			}
+			log.Fatal(err)
+			return
+		}
+
+		switch command {
+		case "SET":
+			var expiry *time.Time = nil
+
+			expiryCmd := ""
+			var nx bool = false
+			var xx bool = false
+			var ttl bool = false
+			var get bool = false
+
+			var errFlag = 0
+
+			for i := 2; i < len(args); {
+				cmd := strings.ToUpper(args[i])
+				switch cmd {
+				case "EX":
+					if (expiryCmd != "" && expiryCmd != cmd) || ttl {
+						errFlag = 1
+						goto errHandler
+					}
+
+					if i+1 >= len(args) {
+						errFlag = 1
+						goto errHandler
+					}
+
+					seconds, err := strconv.Atoi(args[i+1])
+
+					if err != nil || seconds <= 0 {
+						errFlag = 1
+						goto errHandler
+					}
+
+					expire := time.Now().Add(time.Duration(seconds) * time.Second)
+					expiry = &expire
+
+					expiryCmd = cmd
+					i += 2
+				case "PX":
+					if (expiryCmd != "" && expiryCmd != cmd) || ttl {
+						errFlag = 1
+						goto errHandler
+					}
+
+					if i+1 >= len(args) {
+						errFlag = 1
+						goto errHandler
+					}
+
+					milliseconds, err := strconv.Atoi(args[i+1])
+
+					if err != nil || milliseconds <= 0 {
+						errFlag = 1
+						goto errHandler
+					}
+
+					expire := time.Now().Add(time.Duration(milliseconds) * time.Millisecond)
+					expiry = &expire
+					expiryCmd = cmd
+					i += 2
+				case "KEEPTTL":
+					if expiryCmd != "" && expiryCmd != cmd {
+						errFlag = 1
+						goto errHandler
+					}
+					expiryCmd = cmd
+					ttl = true
+					i++
+				case "NX":
+					if xx {
+						errFlag = 1
+						goto errHandler
+					}
+					nx = true
+					i++
+				case "XX":
+					if nx {
+						errFlag = 1
+						goto errHandler
+					}
+					xx = true
+					i++
+				case "GET":
+					get = true
+					i++
+				default:
+					errFlag = 1
+					goto errHandler
+				}
+			}
+
+		errHandler:
+			if errFlag == 1 {
+				continue
+			}
+			store.Set(args[0], args[1], expiry, nx, xx, ttl, get)
+		}
+	}
+}
+
+func sendHandshake(masterHost string, masterPort string, persistence *store.Persistence) *net.Conn {
 	conn, err := net.Dial("tcp", net.JoinHostPort(masterHost, masterPort))
 
 	if err != nil {
 		panic(err)
 	}
-	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
 	conn.Write([]byte("*1\r\n$4\r\nping\r\n"))
@@ -375,9 +502,9 @@ func sendHandshake(masterHost string, masterPort string, persistence *store.Pers
 	conn.Write([]byte("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"))
 
 	_, content, _ := parser.ParseRDBMessage(reader)
-	if err := persistence.LoadDataFromFile(content); err != nil {
-		return
-	}
+	persistence.LoadDataFromFile(content)
+
+	return &conn
 }
 
 func main() {
@@ -398,20 +525,26 @@ func main() {
 	}
 
 	if *replicaOf != "" {
-		hostPortArr := strings.Split(*replicaOf, " ")
-		if len(hostPortArr) != 2 {
-			panic(errors.New("invalid host/port passed"))
-		}
+		go func() {
+			hostPortArr := strings.Split(*replicaOf, " ")
+			if len(hostPortArr) != 2 {
+				panic(errors.New("invalid host/port passed"))
+			}
 
-		if err := validateHost(hostPortArr[0]); err != nil {
-			panic(err)
-		}
+			if err := validateHost(hostPortArr[0]); err != nil {
+				panic(err)
+			}
 
-		if err := validatePort(hostPortArr[1]); err != nil {
-			panic(err)
-		}
-		info["replication"]["role"] = "slave"
-		sendHandshake(hostPortArr[0], hostPortArr[1], persistence)
+			if err := validatePort(hostPortArr[1]); err != nil {
+				panic(err)
+			}
+			info["replication"]["role"] = "slave"
+			conn := sendHandshake(hostPortArr[0], hostPortArr[1], persistence)
+
+			handleSlaveCommands(*conn, memStore, persistence)
+
+			defer (*conn).Close()
+		}()
 	}
 
 	for {

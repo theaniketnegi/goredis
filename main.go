@@ -181,6 +181,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 		case "DEL":
 			if len(args) == 0 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'del' command\r\n"))
+				continue
 			}
 
 			deletedKeys := store.DelKeys(args)

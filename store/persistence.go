@@ -55,6 +55,7 @@ func NewPersistence(kvStore *InMemoryStore, fileDir string) (*Persistence, error
 		return nil, err
 	}
 
+	p.AutoBGSave(10000)
 	return p, nil
 }
 
@@ -92,7 +93,7 @@ func (p *Persistence) Save() error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(persistentFileDir + "/" + tmpfile.Name())
+	defer os.Remove(tmpfile.Name())
 
 	encoder := gob.NewEncoder(tmpfile)
 	err = encoder.Encode(p.memory)
@@ -104,7 +105,7 @@ func (p *Persistence) Save() error {
 
 	tmpfile.Close()
 
-	err = os.Rename(persistentFileDir+"/"+tmpfile.Name(), p.persistentFile)
+	err = os.Rename(tmpfile.Name(), p.persistentFile)
 	if err != nil {
 		return err
 	}
@@ -130,6 +131,16 @@ func (p *Persistence) BGSave() error {
 		p.Save()
 	}()
 	return nil
+}
+
+func (p *Persistence) AutoBGSave(sleepTime time.Duration) {
+	go func() {
+		for {
+			time.Sleep(sleepTime * time.Millisecond)
+
+			p.BGSave()
+		}
+	}()
 }
 
 func (p *Persistence) LastSave() int64 {

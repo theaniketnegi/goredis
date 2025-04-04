@@ -17,9 +17,11 @@ type InMemoryStore struct {
 }
 
 func NewInMemoryStore() *InMemoryStore {
-	return &InMemoryStore{
+	s := &InMemoryStore{
 		Storage: make(map[string]StoreValue),
 	}
+	s.BackgroundKeyCleanup(15000)
+	return s
 }
 
 func hasExpired(expiry *time.Time) bool {
@@ -51,6 +53,7 @@ func (s *InMemoryStore) Set(key string, value string, expiry *time.Time, nx bool
 
 	oldVal, ok := s.Storage[key]
 	if hasExpired(oldVal.Expiry) {
+		delete(s.Storage, key)
 		ok = false
 	}
 	if nx && ok {
@@ -92,4 +95,36 @@ func (s *InMemoryStore) GetKeys(pattern string) []string {
 	}
 
 	return matchedKeys
+}
+
+func (s *InMemoryStore) DelKeys(keys []string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	count := 0
+
+	for _, k := range keys {
+		if _, ok := s.Storage[k]; ok {
+			delete(s.Storage, k)
+			count++
+		}
+	}
+
+	return count
+}
+
+func (s *InMemoryStore) BackgroundKeyCleanup(sleepTime time.Duration) {
+	go func() {
+		for {
+			time.Sleep(sleepTime * time.Millisecond)
+
+			s.mu.Lock()
+			for k, v := range s.Storage {
+				if hasExpired(v.Expiry) {
+					delete(s.Storage, k)
+				}
+			}
+			s.mu.Unlock()
+		}
+	}()
 }

@@ -184,9 +184,16 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			deletedKeys := store.DelKeys(args)
+			deletedKeys := store.NumKeyExists(args, true)
 
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", deletedKeys))
+		case "EXISTS":
+			if len(args) == 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'del' command\r\n"))
+				continue
+			}
+
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", store.NumKeyExists(args, false)))
 		case "TTL":
 			if len(args) != 1 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'ttl' command\r\n"))

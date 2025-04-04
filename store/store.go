@@ -97,7 +97,7 @@ func (s *InMemoryStore) GetKeys(pattern string) []string {
 	return matchedKeys
 }
 
-func (s *InMemoryStore) DelKeys(keys []string) int {
+func (s *InMemoryStore) NumKeyExists(keys []string, shouldDelete bool) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -105,7 +105,9 @@ func (s *InMemoryStore) DelKeys(keys []string) int {
 
 	for _, k := range keys {
 		if _, ok := s.Storage[k]; ok {
-			delete(s.Storage, k)
+			if shouldDelete {
+				delete(s.Storage, k)
+			}
 			count++
 		}
 	}

@@ -337,8 +337,23 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "APPEND":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'append' command\r\n"))
+				continue
+			}
+
+			storeVal, ok := store.Get(args[0])
+			if !ok {
+				store.Set(args[0], args[1], nil, false, false, false, false)
+				conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args[1])))
+				continue
+			}
+
+			store.Set(args[0], storeVal.Value+args[1], nil, false, false, false, false)
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(storeVal.Value+args[1])))
 		default:
-			conn.Write([]byte("+PONG\r\n"))
+			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}
 	}
 }

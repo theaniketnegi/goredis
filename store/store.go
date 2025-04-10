@@ -43,6 +43,7 @@ func (s *InMemoryStore) Get(key string) (StoreValue, bool) {
 	value, ok := s.Storage[key]
 
 	if hasExpired(value.Expiry) {
+		delete(s.Storage, key)
 		return StoreValue{}, false
 	}
 

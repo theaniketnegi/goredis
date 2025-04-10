@@ -352,6 +352,31 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 
 			store.Set(args[0], storeVal.Value+args[1], nil, false, false, false, false)
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(storeVal.Value+args[1])))
+		case "MSET":
+			if len(args) < 2 || len(args)%2 != 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'mset' command\r\n"))
+				continue
+			}
+			for i := 0; i < len(args); i += 2 {
+				store.Set(args[i], args[i+1], nil, false, false, false, false)
+			}
+			conn.Write([]byte("+OK\r\n"))
+		case "MGET":
+			if len(args) == 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'mget' command\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(args)))
+			for _, key := range args {
+				storeVal, ok := store.Get(key)
+				if !ok {
+					resp.WriteString("_\r\n")
+					continue
+				}
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(storeVal.Value), storeVal.Value))
+			}
+			conn.Write([]byte(resp.String()))
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

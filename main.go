@@ -282,6 +282,61 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", persistence.LastSave()))
+		case "INCR":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'incr' command\r\n"))
+				continue
+			}
+
+			val, err := store.Increment(args[0], 1)
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "INCRBY":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'incrby' command\r\n"))
+				continue
+			}
+			by, err := strconv.Atoi(args[1])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			val, err := store.Increment(args[0], int64(by))
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "DECR":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'decr' command\r\n"))
+				continue
+			}
+			val, err := store.Increment(args[0], -1)
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "DECRBY":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'decrby' command\r\n"))
+				continue
+			}
+			by, err := strconv.Atoi(args[1])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			val, err := store.Increment(args[0], -int64(by))
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
 		default:
 			conn.Write([]byte("+PONG\r\n"))
 		}

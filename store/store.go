@@ -2,7 +2,9 @@ package store
 
 import (
 	"fmt"
+	"math"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -95,6 +97,37 @@ func (s *InMemoryStore) GetKeys(pattern string) []string {
 	}
 
 	return matchedKeys
+}
+
+func (s *InMemoryStore) Increment(key string, by int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	storeValue, ok := s.Storage[key]
+
+	if !ok {
+		s.Storage[key] = StoreValue{Value: fmt.Sprintf("%d", by)}
+		return by, nil
+	}
+
+	if hasExpired(storeValue.Expiry) {
+		delete(s.Storage, key)
+		s.Storage[key] = StoreValue{Value: fmt.Sprintf("%d", by)}
+		return by, fmt.Errorf("key expired")
+	}
+
+	value, err := strconv.ParseInt(storeValue.Value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("value is not an integer or out of range")
+	}
+
+	if (by > 0 && value > math.MaxInt64 - by) || (by < 0 && value < math.MinInt64 - by) {
+		return 0, fmt.Errorf("increment or decrement would overflow")
+	}
+
+	value += by
+	s.Storage[key] = StoreValue{Value: fmt.Sprintf("%d", value), Expiry: storeValue.Expiry}
+	return value, nil
 }
 
 func (s *InMemoryStore) NumKeyExists(keys []string, shouldDelete bool) int {

@@ -63,7 +63,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			val, ok := store.Get(args[0])
 
 			if !ok {
-				conn.Write([]byte("_\r\n"))
+				conn.Write([]byte("$-1\r\n"))
 				continue
 			}
 			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val.Value), val.Value))
@@ -282,8 +282,103 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", persistence.LastSave()))
+		case "INCR":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'incr' command\r\n"))
+				continue
+			}
+
+			val, err := store.Increment(args[0], 1)
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "INCRBY":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'incrby' command\r\n"))
+				continue
+			}
+			by, err := strconv.Atoi(args[1])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			val, err := store.Increment(args[0], int64(by))
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "DECR":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'decr' command\r\n"))
+				continue
+			}
+			val, err := store.Increment(args[0], -1)
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "DECRBY":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'decrby' command\r\n"))
+				continue
+			}
+			by, err := strconv.Atoi(args[1])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			val, err := store.Increment(args[0], -int64(by))
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "APPEND":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'append' command\r\n"))
+				continue
+			}
+
+			storeVal, ok := store.Get(args[0])
+			if !ok {
+				store.Set(args[0], args[1], nil, false, false, false, false)
+				conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args[1])))
+				continue
+			}
+
+			store.Set(args[0], storeVal.Value+args[1], nil, false, false, false, false)
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(storeVal.Value+args[1])))
+		case "MSET":
+			if len(args) < 2 || len(args)%2 != 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'mset' command\r\n"))
+				continue
+			}
+			for i := 0; i < len(args); i += 2 {
+				store.Set(args[i], args[i+1], nil, false, false, false, false)
+			}
+			conn.Write([]byte("+OK\r\n"))
+		case "MGET":
+			if len(args) == 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'mget' command\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(args)))
+			for _, key := range args {
+				storeVal, ok := store.Get(key)
+				if !ok {
+					resp.WriteString("$-1\r\n")
+					continue
+				}
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(storeVal.Value), storeVal.Value))
+			}
+			conn.Write([]byte(resp.String()))
 		default:
-			conn.Write([]byte("+PONG\r\n"))
+			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}
 	}
 }

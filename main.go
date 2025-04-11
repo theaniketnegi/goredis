@@ -63,7 +63,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			val, ok := store.Get(args[0])
 
 			if !ok {
-				conn.Write([]byte("_\r\n"))
+				conn.Write([]byte("$-1\r\n"))
 				continue
 			}
 			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val.Value), val.Value))
@@ -371,7 +371,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			for _, key := range args {
 				storeVal, ok := store.Get(key)
 				if !ok {
-					resp.WriteString("_\r\n")
+					resp.WriteString("$-1\r\n")
 					continue
 				}
 				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(storeVal.Value), storeVal.Value))

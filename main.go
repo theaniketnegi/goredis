@@ -402,8 +402,8 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				}
 			}
 
-			len, _ := store.LLen(args[0])
-			conn.Write(fmt.Appendf(nil, ":%d\r\n", len))
+			listLen, _ := store.LLen(args[0])
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
 		case "RPUSH":
 			if len(args) < 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'rpush' command\r\n"))
@@ -418,8 +418,8 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				}
 			}
 
-			len, _ := store.LLen(args[0])
-			conn.Write(fmt.Appendf(nil, ":%d\r\n", len))
+			listLen, _ := store.LLen(args[0])
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
 		case "LPOP":
 			if len(args) < 1 || len(args) > 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'lpop' command\r\n"))
@@ -523,12 +523,12 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				conn.Write([]byte("-ERR wrong number of arguments for 'llen' command\r\n"))
 				continue
 			}
-			len, err := store.LLen(args[0])
+			listLen, err := store.LLen(args[0])
 			if err != nil {
 				conn.Write([]byte(err.Error() + "\r\n"))
 				continue
 			}
-			conn.Write(fmt.Appendf(nil, ":%d\r\n", len))
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
 		case "LRANGE":
 			if len(args) != 3 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'lrange' command\r\n"))

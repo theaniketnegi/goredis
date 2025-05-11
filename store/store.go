@@ -1,6 +1,8 @@
 package store
 
 import (
+	"container/list"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -13,17 +15,202 @@ type StoreValue struct {
 	Value  string
 	Expiry *time.Time
 }
+
+type StoreType int
+
+const (
+	StringType StoreType = iota
+	ListType
+	SetType
+	HashType
+	SortedSetType
+)
+
 type InMemoryStore struct {
-	Storage map[string]StoreValue
-	mu      sync.RWMutex
+	KeyType  map[string]StoreType
+	StringKV map[string]StoreValue
+	ListKV   map[string]*list.List
+	mu       sync.RWMutex
 }
 
 func NewInMemoryStore() *InMemoryStore {
 	s := &InMemoryStore{
-		Storage: make(map[string]StoreValue),
+		KeyType:  make(map[string]StoreType),
+		StringKV: make(map[string]StoreValue),
+		ListKV:   make(map[string]*list.List),
 	}
 	s.BackgroundKeyCleanup(15000)
 	return s
+}
+
+func NewList() *list.List {
+	return list.New()
+}
+
+func (s *InMemoryStore) LPush(key string, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.ListKV[key]; !ok {
+		s.ListKV[key] = NewList()
+		s.KeyType[key] = ListType
+	}
+
+	s.ListKV[key].PushFront(value)
+	return nil
+}
+func (s *InMemoryStore) RPush(key string, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		s.ListKV[key] = NewList()
+		s.KeyType[key] = ListType
+	}
+	s.ListKV[key].PushBack(value)
+	return nil
+}
+func (s *InMemoryStore) LPop(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return "", errors.New("_")
+	}
+
+	value := s.ListKV[key].Remove(s.ListKV[key].Front())
+	if s.ListKV[key].Len() == 0 {
+		delete(s.ListKV, key)
+		delete(s.KeyType, key)
+	}
+	return value.(string), nil
+}
+func (s *InMemoryStore) RPop(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return "", errors.New("_")
+	}
+	value := s.ListKV[key].Remove(s.ListKV[key].Back())
+	if s.ListKV[key].Len() == 0 {
+		delete(s.ListKV, key)
+		delete(s.KeyType, key)
+	}
+	return value.(string), nil
+}
+func (s *InMemoryStore) LLen(key string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return 0, nil
+	}
+	return s.ListKV[key].Len(), nil
+}
+
+func (s *InMemoryStore) LRange(key string, start int, end int) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return nil, nil
+	}
+
+	listLen := s.ListKV[key].Len()
+	if start >= listLen || start > end {
+		return nil, nil
+	}
+
+	if start < 0 {
+		start = listLen + start
+	}
+	if end < 0 {
+		end = listLen + end
+	}
+	if end >= listLen {
+		end = listLen - 1
+	}
+
+	var values []string
+	curElement := s.ListKV[key].Front()
+	curIndex := 0
+
+	for curElement != nil && curIndex < start {
+		curElement = curElement.Next()
+		curIndex++
+	}
+
+	for curElement != nil && curIndex <= end {
+		values = append(values, curElement.Value.(string))
+		curElement = curElement.Next()
+		curIndex++
+	}
+
+	return values, nil
+}
+
+func (s *InMemoryStore) LTrim(key string, start int, end int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return nil
+	}
+	listLen := s.ListKV[key].Len()
+	if start >= listLen || start > end {
+		delete(s.ListKV, key)
+		delete(s.KeyType, key)
+		return nil
+	}
+
+	if start < 0 {
+		start = listLen + start
+	}
+	if end < 0 {
+		end = listLen + end
+	}
+
+	if end >= listLen {
+		end = listLen - 1
+	}
+	for range start {
+		s.ListKV[key].Remove(s.ListKV[key].Front())
+	}
+
+	for i := end + 1; i < listLen; i++ {
+		s.ListKV[key].Remove(s.ListKV[key].Back())
+	}
+	if s.ListKV[key].Len() == 0 {
+		delete(s.ListKV, key)
+		delete(s.KeyType, key)
+	}
+
+	return nil
 }
 
 func hasExpired(expiry *time.Time) bool {
@@ -36,27 +223,41 @@ func hasExpired(expiry *time.Time) bool {
 	return timeLeft <= 0
 }
 
-func (s *InMemoryStore) Get(key string) (StoreValue, bool) {
+func (s *InMemoryStore) StringGet(key string) (StoreValue, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	value, ok := s.Storage[key]
+	keyType, ok := s.KeyType[key]
+	if !ok {
+		return StoreValue{}, false, nil
+	}
+	if keyType != StringType {
+		return StoreValue{}, false, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	value, ok := s.StringKV[key]
 
 	if hasExpired(value.Expiry) {
-		delete(s.Storage, key)
-		return StoreValue{}, false
+		delete(s.StringKV, key)
+		delete(s.KeyType, key)
+		return StoreValue{}, false, nil
 	}
 
-	return value, ok
+	return value, ok, nil
 }
 
-func (s *InMemoryStore) Set(key string, value string, expiry *time.Time, nx bool, xx bool, ttl bool, get bool) string {
+func (s *InMemoryStore) StringSet(key string, value string, expiry *time.Time, nx bool, xx bool, ttl bool, get bool) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	oldVal, ok := s.Storage[key]
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != StringType {
+		return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+	}
+
+	oldVal, ok := s.StringKV[key]
 	if hasExpired(oldVal.Expiry) {
-		delete(s.Storage, key)
+		delete(s.StringKV, key)
+		delete(s.KeyType, key)
 		ok = false
 	}
 	if nx && ok {
@@ -75,7 +276,8 @@ func (s *InMemoryStore) Set(key string, value string, expiry *time.Time, nx bool
 		}
 	}
 
-	s.Storage[key] = StoreValue{Value: value, Expiry: expiry}
+	s.StringKV[key] = StoreValue{Value: value, Expiry: expiry}
+	s.KeyType[key] = StringType
 	if get {
 		if ok {
 			return fmt.Sprintf("$%d\r\n%s\r\n", len(oldVal.Value), oldVal.Value)
@@ -91,7 +293,7 @@ func (s *InMemoryStore) GetKeys(pattern string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var matchedKeys []string
-	for k := range s.Storage {
+	for k := range s.KeyType {
 		if match, _ := regexp.MatchString(pattern, k); match {
 			matchedKeys = append(matchedKeys, k)
 		}
@@ -104,30 +306,38 @@ func (s *InMemoryStore) Increment(key string, by int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	storeValue, ok := s.Storage[key]
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != StringType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	storeValue, ok := s.StringKV[key]
 
 	if !ok {
-		s.Storage[key] = StoreValue{Value: fmt.Sprintf("%d", by)}
+		s.StringKV[key] = StoreValue{Value: fmt.Sprintf("%d", by)}
+		s.KeyType[key] = StringType
 		return by, nil
 	}
 
 	if hasExpired(storeValue.Expiry) {
-		delete(s.Storage, key)
-		s.Storage[key] = StoreValue{Value: fmt.Sprintf("%d", by)}
+		delete(s.StringKV, key)
+		delete(s.KeyType, key)
+		s.StringKV[key] = StoreValue{Value: fmt.Sprintf("%d", by)}
+		s.KeyType[key] = StringType
 		return by, nil
 	}
 
 	value, err := strconv.ParseInt(storeValue.Value, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("value is not an integer or out of range")
+		return 0, fmt.Errorf("-ERR value is not an integer or out of range")
 	}
 
 	if (by > 0 && value > math.MaxInt64-by) || (by < 0 && value < math.MinInt64-by) {
-		return 0, fmt.Errorf("increment or decrement would overflow")
+		return 0, fmt.Errorf("-ERR increment or decrement would overflow")
 	}
 
 	value += by
-	s.Storage[key] = StoreValue{Value: fmt.Sprintf("%d", value), Expiry: storeValue.Expiry}
+	s.StringKV[key] = StoreValue{Value: fmt.Sprintf("%d", value), Expiry: storeValue.Expiry}
 	return value, nil
 }
 
@@ -138,9 +348,14 @@ func (s *InMemoryStore) NumKeyExists(keys []string, shouldDelete bool) int {
 	count := 0
 
 	for _, k := range keys {
-		if _, ok := s.Storage[k]; ok {
+		if keyType, ok := s.KeyType[k]; ok {
 			if shouldDelete {
-				delete(s.Storage, k)
+				if keyType == StringType {
+					delete(s.StringKV, k)
+				} else if keyType == ListType {
+					delete(s.ListKV, k)
+				}
+				delete(s.KeyType, k)
 			}
 			count++
 		}
@@ -155,9 +370,10 @@ func (s *InMemoryStore) BackgroundKeyCleanup(sleepTime time.Duration) {
 			time.Sleep(sleepTime * time.Millisecond)
 
 			s.mu.Lock()
-			for k, v := range s.Storage {
+			for k, v := range s.StringKV {
 				if hasExpired(v.Expiry) {
-					delete(s.Storage, k)
+					delete(s.KeyType, k)
+					delete(s.StringKV, k)
 				}
 			}
 			s.mu.Unlock()

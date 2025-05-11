@@ -60,8 +60,11 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				conn.Write([]byte("-ERR wrong number of arguments for 'get' command\r\n"))
 				continue
 			}
-			val, ok := store.Get(args[0])
-
+			val, ok, err := store.StringGet(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
 			if !ok {
 				conn.Write([]byte("$-1\r\n"))
 				continue
@@ -177,7 +180,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			conn.Write([]byte(store.Set(args[0], args[1], expiry, nx, xx, ttl, get)))
+			conn.Write([]byte(store.StringSet(args[0], args[1], expiry, nx, xx, ttl, get)))
 		case "DEL":
 			if len(args) == 0 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'del' command\r\n"))
@@ -200,7 +203,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			storeVal, ok := store.Get(args[0])
+			storeVal, ok, _ := store.StringGet(args[0])
 			if !ok {
 				conn.Write([]byte(":-2\r\n"))
 				continue
@@ -290,7 +293,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 
 			val, err := store.Increment(args[0], 1)
 			if err != nil {
-				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				conn.Write([]byte(err.Error() + "\r\n"))
 				continue
 			}
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
@@ -343,14 +346,18 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			storeVal, ok := store.Get(args[0])
+			storeVal, ok, err := store.StringGet(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
 			if !ok {
-				store.Set(args[0], args[1], nil, false, false, false, false)
+				store.StringSet(args[0], args[1], nil, false, false, false, false)
 				conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args[1])))
 				continue
 			}
 
-			store.Set(args[0], storeVal.Value+args[1], nil, false, false, false, false)
+			store.StringSet(args[0], storeVal.Value+args[1], nil, false, false, false, false)
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(storeVal.Value+args[1])))
 		case "MSET":
 			if len(args) < 2 || len(args)%2 != 0 {
@@ -358,7 +365,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			for i := 0; i < len(args); i += 2 {
-				store.Set(args[i], args[i+1], nil, false, false, false, false)
+				store.StringSet(args[i], args[i+1], nil, false, false, false, false)
 			}
 			conn.Write([]byte("+OK\r\n"))
 		case "MGET":
@@ -369,7 +376,11 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			var resp strings.Builder
 			resp.WriteString(fmt.Sprintf("*%d\r\n", len(args)))
 			for _, key := range args {
-				storeVal, ok := store.Get(key)
+				storeVal, ok, err := store.StringGet(key)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
 				if !ok {
 					resp.WriteString("$-1\r\n")
 					continue
@@ -377,6 +388,196 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(storeVal.Value), storeVal.Value))
 			}
 			conn.Write([]byte(resp.String()))
+		case "LPUSH":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'lpush' command\r\n"))
+				continue
+			}
+
+			for i := 1; i < len(args); i++ {
+				err := store.LPush(args[0], args[i])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+			}
+
+			listLen, _ := store.LLen(args[0])
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
+		case "RPUSH":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'rpush' command\r\n"))
+				continue
+			}
+
+			for i := 1; i < len(args); i++ {
+				err := store.RPush(args[0], args[i])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+			}
+
+			listLen, _ := store.LLen(args[0])
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
+		case "LPOP":
+			if len(args) < 1 || len(args) > 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'lpop' command\r\n"))
+				continue
+			}
+			if len(args) == 1 {
+				val, err := store.LPop(args[0])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+				continue
+			}
+			count, err := strconv.Atoi(args[1])
+			if err != nil || count <= 0 {
+				conn.Write([]byte("-ERR value is out of range, must be positive\r\n"))
+				continue
+			}
+			size, err := store.LLen(args[0])
+
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			if size == 0 {
+				conn.Write([]byte("_\r\n"))
+				continue
+			}
+
+			if count > size {
+				count = size
+			}
+
+			var poppedValues []string
+			for range count {
+				val, err := store.LPop(args[0])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				poppedValues = append(poppedValues, val)
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(poppedValues)))
+			for _, val := range poppedValues {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "RPOP":
+			if len(args) < 1 || len(args) > 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'rpop' command\r\n"))
+				continue
+			}
+			if len(args) == 1 {
+				val, err := store.RPop(args[0])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+				continue
+			}
+			count, err := strconv.Atoi(args[1])
+			if err != nil || count <= 0 {
+				conn.Write([]byte("-ERR value is out of range, must be positive\r\n"))
+				continue
+			}
+			size, err := store.LLen(args[0])
+
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			if size == 0 {
+				conn.Write([]byte("_\r\n"))
+				continue
+			}
+
+			if count > size {
+				count = size
+			}
+
+			var poppedValues []string
+			for range count {
+				val, err := store.RPop(args[0])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				poppedValues = append(poppedValues, val)
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(poppedValues)))
+			for _, val := range poppedValues {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "LLEN":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'llen' command\r\n"))
+				continue
+			}
+			listLen, err := store.LLen(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
+		case "LRANGE":
+			if len(args) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'lrange' command\r\n"))
+				continue
+			}
+
+			start, err := strconv.Atoi(args[1])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			end, err := strconv.Atoi(args[2])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+
+			values, err := store.LRange(args[0], start, end)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(values)))
+			for _, val := range values {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "LTRIM":
+			if len(args) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'ltrim' command\r\n"))
+				continue
+			}
+			start, err := strconv.Atoi(args[1])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			stop, err := strconv.Atoi(args[2])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			err = store.LTrim(args[0], start, stop)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write([]byte("+OK\r\n"))
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

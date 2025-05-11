@@ -153,33 +153,19 @@ func (s *InMemoryStore) LRange(key string, start int, end int) ([]string, error)
 		end = listLen - 1
 	}
 
-	var delValues []string
 	var values []string
+	curElement := s.ListKV[key].Front()
+	curIndex := 0
 
-	for range start {
-		element := s.ListKV[key].Remove(s.ListKV[key].Front())
-		if element == nil {
-			break
-		}
-		delValues = append(delValues, element.(string))
-	}
-	for iterator := start; iterator <= end; iterator++ {
-		element := s.ListKV[key].Remove(s.ListKV[key].Front())
-		if element == nil {
-			break
-		}
-		values = append(values, element.(string))
+	for curElement != nil && curIndex < start {
+		curElement = curElement.Next()
+		curIndex++
 	}
 
-	for i := len(values) - 1; i >= 0; i-- {
-		s.ListKV[key].PushFront(values[i])
-	}
-	for i := len(delValues) - 1; i >= 0; i-- {
-		s.ListKV[key].PushFront(delValues[i])
-	}
-
-	if len(values) == 0 {
-		return nil, nil
+	for curElement != nil && curIndex <= end {
+		values = append(values, curElement.Value.(string))
+		curElement = curElement.Next()
+		curIndex++
 	}
 
 	return values, nil

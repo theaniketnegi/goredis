@@ -388,6 +388,196 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(storeVal.Value), storeVal.Value))
 			}
 			conn.Write([]byte(resp.String()))
+		case "LPUSH":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'lpush' command\r\n"))
+				continue
+			}
+
+			for i := 1; i < len(args); i++ {
+				err := store.LPush(args[0], args[i])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+			}
+
+			len, _ := store.LLen(args[0])
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", len))
+		case "RPUSH":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'rpush' command\r\n"))
+				continue
+			}
+
+			for i := 1; i < len(args); i++ {
+				err := store.RPush(args[0], args[i])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+			}
+
+			len, _ := store.LLen(args[0])
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", len))
+		case "LPOP":
+			if len(args) < 1 || len(args) > 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'lpop' command\r\n"))
+				continue
+			}
+			if len(args) == 1 {
+				val, err := store.LPop(args[0])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+				continue
+			}
+			count, err := strconv.Atoi(args[1])
+			if err != nil || count <= 0 {
+				conn.Write([]byte("-ERR value is out of range, must be positive\r\n"))
+				continue
+			}
+			size, err := store.LLen(args[0])
+
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			if size == 0 {
+				conn.Write([]byte("_\r\n"))
+				continue
+			}
+
+			if count > size {
+				count = size
+			}
+
+			var poppedValues []string
+			for range count {
+				val, err := store.LPop(args[0])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				poppedValues = append(poppedValues, val)
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(poppedValues)))
+			for _, val := range poppedValues {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "RPOP":
+			if len(args) < 1 || len(args) > 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'rpop' command\r\n"))
+				continue
+			}
+			if len(args) == 1 {
+				val, err := store.RPop(args[0])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+				continue
+			}
+			count, err := strconv.Atoi(args[1])
+			if err != nil || count <= 0 {
+				conn.Write([]byte("-ERR value is out of range, must be positive\r\n"))
+				continue
+			}
+			size, err := store.LLen(args[0])
+
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			if size == 0 {
+				conn.Write([]byte("_\r\n"))
+				continue
+			}
+
+			if count > size {
+				count = size
+			}
+
+			var poppedValues []string
+			for range count {
+				val, err := store.RPop(args[0])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				poppedValues = append(poppedValues, val)
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(poppedValues)))
+			for _, val := range poppedValues {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "LLEN":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'llen' command\r\n"))
+				continue
+			}
+			len, err := store.LLen(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", len))
+		case "LRANGE":
+			if len(args) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'lrange' command\r\n"))
+				continue
+			}
+
+			start, err := strconv.Atoi(args[1])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			end, err := strconv.Atoi(args[2])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+
+			values, err := store.LRange(args[0], start, end)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(values)))
+			for _, val := range values {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "LTRIM":
+			if len(args) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'ltrim' command\r\n"))
+				continue
+			}
+			start, err := strconv.Atoi(args[1])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			stop, err := strconv.Atoi(args[2])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			err = store.LTrim(args[0], start, stop)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write([]byte("+OK\r\n"))
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

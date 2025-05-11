@@ -121,7 +121,7 @@ func (s *InMemoryStore) LLen(key string) (int, error) {
 		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
 	if _, ok := s.ListKV[key]; !ok {
-		return 0, errors.New("_")
+		return 0, nil
 	}
 	return s.ListKV[key].Len(), nil
 }
@@ -170,15 +170,16 @@ func (s *InMemoryStore) LRange(key string, start int, end int) ([]string, error)
 		}
 		values = append(values, element.(string))
 	}
-	for _, value := range delValues {
-		s.ListKV[key].PushFront(value)
+
+	for i := len(values) - 1; i >= 0; i-- {
+		s.ListKV[key].PushFront(values[i])
 	}
-	if len(values) == 0 {
-		return nil, nil
+	for i := len(delValues) - 1; i >= 0; i-- {
+		s.ListKV[key].PushFront(delValues[i])
 	}
 
-	for _, value := range values {
-		s.ListKV[key].PushFront(value)
+	if len(values) == 0 {
+		return nil, nil
 	}
 
 	return values, nil
@@ -365,6 +366,8 @@ func (s *InMemoryStore) NumKeyExists(keys []string, shouldDelete bool) int {
 			if shouldDelete {
 				if keyType == StringType {
 					delete(s.StringKV, k)
+				} else if keyType == ListType {
+					delete(s.ListKV, k)
 				}
 				delete(s.KeyType, k)
 			}

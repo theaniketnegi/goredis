@@ -1,6 +1,7 @@
 package store
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"math"
@@ -28,6 +29,7 @@ const (
 type InMemoryStore struct {
 	KeyType  map[string]StoreType
 	StringKV map[string]StoreValue
+	ListKV   map[string]*list.List
 	mu       sync.RWMutex
 }
 
@@ -35,9 +37,193 @@ func NewInMemoryStore() *InMemoryStore {
 	s := &InMemoryStore{
 		KeyType:  make(map[string]StoreType),
 		StringKV: make(map[string]StoreValue),
+		ListKV:   make(map[string]*list.List),
 	}
 	s.BackgroundKeyCleanup(15000)
 	return s
+}
+
+func NewList() *list.List {
+	return list.New()
+}
+
+func (s *InMemoryStore) LPush(key string, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.ListKV[key]; !ok {
+		s.ListKV[key] = NewList()
+		s.KeyType[key] = ListType
+	}
+
+	s.ListKV[key].PushFront(value)
+	return nil
+}
+func (s *InMemoryStore) RPush(key string, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		s.ListKV[key] = NewList()
+		s.KeyType[key] = ListType
+	}
+	s.ListKV[key].PushBack(value)
+	return nil
+}
+func (s *InMemoryStore) LPop(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return "", errors.New("_")
+	}
+
+	value := s.ListKV[key].Remove(s.ListKV[key].Front())
+	if s.ListKV[key].Len() == 0 {
+		delete(s.ListKV, key)
+		delete(s.KeyType, key)
+	}
+	return value.(string), nil
+}
+func (s *InMemoryStore) RPop(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return "", errors.New("_")
+	}
+	value := s.ListKV[key].Remove(s.ListKV[key].Back())
+	if s.ListKV[key].Len() == 0 {
+		delete(s.ListKV, key)
+		delete(s.KeyType, key)
+	}
+	return value.(string), nil
+}
+func (s *InMemoryStore) LLen(key string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return 0, errors.New("_")
+	}
+	return s.ListKV[key].Len(), nil
+}
+
+func (s *InMemoryStore) LRange(key string, start int, end int) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return nil, nil
+	}
+
+	listLen := s.ListKV[key].Len()
+	if start >= listLen || start > end {
+		return nil, nil
+	}
+
+	if start < 0 {
+		start = listLen + start
+	}
+	if end < 0 {
+		end = listLen + end
+	}
+	if end >= listLen {
+		end = listLen - 1
+	}
+
+	var delValues []string
+	var values []string
+
+	for range start {
+		element := s.ListKV[key].Remove(s.ListKV[key].Front())
+		if element == nil {
+			break
+		}
+		delValues = append(delValues, element.(string))
+	}
+	for iterator := start; iterator <= end; iterator++ {
+		element := s.ListKV[key].Remove(s.ListKV[key].Front())
+		if element == nil {
+			break
+		}
+		values = append(values, element.(string))
+	}
+	for _, value := range delValues {
+		s.ListKV[key].PushFront(value)
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	for _, value := range values {
+		s.ListKV[key].PushFront(value)
+	}
+
+	return values, nil
+}
+
+func (s *InMemoryStore) LTrim(key string, start int, end int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != ListType {
+		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	if _, ok := s.ListKV[key]; !ok {
+		return nil
+	}
+	listLen := s.ListKV[key].Len()
+	if start >= listLen || start > end {
+		delete(s.ListKV, key)
+		delete(s.KeyType, key)
+		return nil
+	}
+
+	if start < 0 {
+		start = listLen + start
+	}
+	if end < 0 {
+		end = listLen + end
+	}
+
+	if end >= listLen {
+		end = listLen - 1
+	}
+	for range start {
+		s.ListKV[key].Remove(s.ListKV[key].Front())
+	}
+
+	for i := end + 1; i < listLen; i++ {
+		s.ListKV[key].Remove(s.ListKV[key].Back())
+	}
+	if s.ListKV[key].Len() == 0 {
+		delete(s.ListKV, key)
+		delete(s.KeyType, key)
+	}
+
+	return nil
 }
 
 func hasExpired(expiry *time.Time) bool {

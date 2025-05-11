@@ -60,8 +60,11 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				conn.Write([]byte("-ERR wrong number of arguments for 'get' command\r\n"))
 				continue
 			}
-			val, ok := store.Get(args[0])
-
+			val, ok, err := store.StringGet(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
 			if !ok {
 				conn.Write([]byte("$-1\r\n"))
 				continue
@@ -177,7 +180,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			conn.Write([]byte(store.Set(args[0], args[1], expiry, nx, xx, ttl, get)))
+			conn.Write([]byte(store.StringSet(args[0], args[1], expiry, nx, xx, ttl, get)))
 		case "DEL":
 			if len(args) == 0 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'del' command\r\n"))
@@ -200,7 +203,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			storeVal, ok := store.Get(args[0])
+			storeVal, ok, _ := store.StringGet(args[0])
 			if !ok {
 				conn.Write([]byte(":-2\r\n"))
 				continue
@@ -290,7 +293,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 
 			val, err := store.Increment(args[0], 1)
 			if err != nil {
-				conn.Write([]byte("-ERR " + err.Error() + "\r\n"))
+				conn.Write([]byte(err.Error() + "\r\n"))
 				continue
 			}
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
@@ -343,14 +346,18 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			storeVal, ok := store.Get(args[0])
+			storeVal, ok, err := store.StringGet(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
 			if !ok {
-				store.Set(args[0], args[1], nil, false, false, false, false)
+				store.StringSet(args[0], args[1], nil, false, false, false, false)
 				conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args[1])))
 				continue
 			}
 
-			store.Set(args[0], storeVal.Value+args[1], nil, false, false, false, false)
+			store.StringSet(args[0], storeVal.Value+args[1], nil, false, false, false, false)
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(storeVal.Value+args[1])))
 		case "MSET":
 			if len(args) < 2 || len(args)%2 != 0 {
@@ -358,7 +365,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			for i := 0; i < len(args); i += 2 {
-				store.Set(args[i], args[i+1], nil, false, false, false, false)
+				store.StringSet(args[i], args[i+1], nil, false, false, false, false)
 			}
 			conn.Write([]byte("+OK\r\n"))
 		case "MGET":
@@ -369,7 +376,11 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			var resp strings.Builder
 			resp.WriteString(fmt.Sprintf("*%d\r\n", len(args)))
 			for _, key := range args {
-				storeVal, ok := store.Get(key)
+				storeVal, ok, err := store.StringGet(key)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
 				if !ok {
 					resp.WriteString("$-1\r\n")
 					continue

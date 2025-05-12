@@ -578,6 +578,55 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			conn.Write([]byte("+OK\r\n"))
+		case "LMOVE":
+			if len(args) != 4 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'lmove' command\r\n"))
+				continue
+			}
+
+			uppercaseSrcFlag := strings.ToUpper(args[2])
+			uppercaseDestFlag := strings.ToUpper(args[3])
+			if uppercaseSrcFlag != "LEFT" && uppercaseSrcFlag != "RIGHT" {
+				conn.Write([]byte("-ERR syntax error\r\n"))
+				continue
+			}
+			if uppercaseDestFlag != "LEFT" && uppercaseDestFlag != "RIGHT" {
+				conn.Write([]byte("-ERR syntax error\r\n"))
+				continue
+			}
+			if uppercaseSrcFlag == "LEFT" {
+				if uppercaseDestFlag == "LEFT" {
+					val, err := store.LMove(args[0], args[1], true, true)
+					if err != nil {
+						conn.Write([]byte(err.Error() + "\r\n"))
+						continue
+					}
+					conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+					continue
+				}
+				val, err := store.LMove(args[0], args[1], true, false)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+				continue
+			}
+			if uppercaseDestFlag == "LEFT" {
+				val, err := store.LMove(args[0], args[1], false, true)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+				continue
+			}
+			val, err := store.LMove(args[0], args[1], false, false)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

@@ -213,6 +213,48 @@ func (s *InMemoryStore) LTrim(key string, start int, end int) error {
 	return nil
 }
 
+func (s *InMemoryStore) LMove(source string, destination string, leftSrc bool, leftDest bool) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	srcType, ok := s.KeyType[source]
+	if ok && srcType != ListType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	destType, ok := s.KeyType[destination]
+	if ok && destType != ListType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.ListKV[source]; !ok {
+		return "", errors.New("_")
+	}
+	if _, ok := s.ListKV[destination]; !ok {
+		s.ListKV[destination] = NewList()
+		s.KeyType[destination] = ListType
+	}
+
+	var value string
+	if leftSrc {
+		value = s.ListKV[source].Remove(s.ListKV[source].Front()).(string)
+	} else {
+		value = s.ListKV[source].Remove(s.ListKV[source].Back()).(string)
+	}
+
+	if s.ListKV[source].Len() == 0 {
+		delete(s.ListKV, source)
+		delete(s.KeyType, source)
+	}
+
+	if leftDest {
+		s.ListKV[destination].PushFront(value)
+	} else {
+		s.ListKV[destination].PushBack(value)
+	}
+
+	return value, nil
+}
+
 func hasExpired(expiry *time.Time) bool {
 	if expiry == nil {
 		return false

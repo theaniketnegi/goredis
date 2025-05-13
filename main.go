@@ -402,11 +402,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				}
 			}
 
-			listLen, _ := store.LLen(args[0])
-			if listLen == 0 {
-				listLen += 1
-			}
-			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args)-1))
 		case "RPUSH":
 			if len(args) < 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'rpush' command\r\n"))
@@ -421,11 +417,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				}
 			}
 
-			listLen, _ := store.LLen(args[0])
-			if listLen == 0 {
-				listLen += 1
-			}
-			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args)-1))
 		case "LPOP":
 			if len(args) < 1 || len(args) > 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'lpop' command\r\n"))
@@ -481,11 +473,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			var keys []string
-			for i := range len(args) - 1 {
-				keys = append(keys, args[i])
-			}
-
+			keys := args[:len(args)-1]
 			var duration time.Duration
 			if args[len(args)-1] == "0" {
 				duration = time.Duration(0 * time.Second)

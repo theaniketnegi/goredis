@@ -403,6 +403,9 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			listLen, _ := store.LLen(args[0])
+			if listLen == 0 {
+				listLen += 1
+			}
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
 		case "RPUSH":
 			if len(args) < 2 {
@@ -419,6 +422,9 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			listLen, _ := store.LLen(args[0])
+			if listLen == 0 {
+				listLen += 1
+			}
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", listLen))
 		case "LPOP":
 			if len(args) < 1 || len(args) > 2 {
@@ -469,6 +475,41 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
 			}
 			conn.Write([]byte(resp.String()))
+		case "BLPOP":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'blpop' command\r\n"))
+				continue
+			}
+
+			var keys []string
+			for i := range len(args) - 1 {
+				keys = append(keys, args[i])
+			}
+
+			var duration time.Duration
+			if args[len(args)-1] == "0" {
+				duration = time.Duration(0 * time.Second)
+			} else {
+				timeout, err := strconv.ParseFloat(args[len(args)-1], 64)
+				if err != nil || timeout < 0 {
+					conn.Write([]byte("-ERR timeout is not a float or out of range\r\n"))
+					continue
+				}
+				duration = time.Duration(timeout * float64(time.Second))
+			}
+
+			key, value, err := store.BLPop(keys, duration)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+
+			if value == "" {
+				conn.Write([]byte("_\r\n"))
+				continue
+			}
+
+			conn.Write(fmt.Appendf(nil, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(value), value))
 		case "RPOP":
 			if len(args) < 1 || len(args) > 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'rpop' command\r\n"))

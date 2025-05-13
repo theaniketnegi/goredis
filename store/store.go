@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -27,17 +28,24 @@ const (
 )
 
 type InMemoryStore struct {
-	KeyType  map[string]StoreType
-	StringKV map[string]StoreValue
-	ListKV   map[string]*list.List
-	mu       sync.RWMutex
+	KeyType               map[string]StoreType
+	StringKV              map[string]StoreValue
+	ListKV                map[string]*list.List
+	BlockedListOperations map[string][]chan ListElement
+	mu                    sync.RWMutex
+}
+
+type ListElement struct {
+	key   string
+	value string
 }
 
 func NewInMemoryStore() *InMemoryStore {
 	s := &InMemoryStore{
-		KeyType:  make(map[string]StoreType),
-		StringKV: make(map[string]StoreValue),
-		ListKV:   make(map[string]*list.List),
+		KeyType:               make(map[string]StoreType),
+		StringKV:              make(map[string]StoreValue),
+		ListKV:                make(map[string]*list.List),
+		BlockedListOperations: make(map[string][]chan ListElement),
 	}
 	s.BackgroundKeyCleanup(15000)
 	return s
@@ -56,6 +64,17 @@ func (s *InMemoryStore) LPush(key string, value string) error {
 		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
 
+	if clients, isBlocked := s.BlockedListOperations[key]; isBlocked {
+		client := clients[0]
+		client <- ListElement{key: key, value: value}
+		if len(clients) > 1 {
+			s.BlockedListOperations[key] = clients[1:]
+		} else {
+			delete(s.BlockedListOperations, key)
+		}
+		return nil
+	}
+
 	if _, ok := s.ListKV[key]; !ok {
 		s.ListKV[key] = NewList()
 		s.KeyType[key] = ListType
@@ -71,6 +90,17 @@ func (s *InMemoryStore) RPush(key string, value string) error {
 	if ok && keyType != ListType {
 		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
+	if clients, isBlocked := s.BlockedListOperations[key]; isBlocked {
+		client := clients[0]
+		client <- ListElement{key: key, value: value}
+		if len(clients) > 1 {
+			s.BlockedListOperations[key] = clients[1:]
+		} else {
+			delete(s.BlockedListOperations, key)
+		}
+		return nil
+	}
+
 	if _, ok := s.ListKV[key]; !ok {
 		s.ListKV[key] = NewList()
 		s.KeyType[key] = ListType
@@ -113,6 +143,71 @@ func (s *InMemoryStore) RPop(key string) (string, error) {
 	}
 	return value.(string), nil
 }
+func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, string, error) {
+	s.mu.Lock()
+
+	for _, key := range keys {
+		keyType, ok := s.KeyType[key]
+		if ok && keyType != ListType {
+			s.mu.Unlock()
+			return "", "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+	}
+
+	for _, key := range keys {
+		if _, ok := s.ListKV[key]; ok {
+			value := s.ListKV[key].Remove(s.ListKV[key].Front())
+			if s.ListKV[key].Len() == 0 {
+				delete(s.ListKV, key)
+				delete(s.KeyType, key)
+			}
+			s.mu.Unlock()
+			return key, value.(string), nil
+		}
+	}
+
+	resultChan := make(chan ListElement, 1)
+
+	cleanupFunc := func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		for _, key := range keys {
+			for i, channel := range s.BlockedListOperations[key] {
+				if channel == resultChan {
+					s.BlockedListOperations[key] = slices.Delete(s.BlockedListOperations[key], i, i+1)
+					break
+				}
+			}
+
+			if len(s.BlockedListOperations[key]) == 0 {
+				delete(s.BlockedListOperations, key)
+			}
+		}
+	}
+
+	for _, key := range keys {
+		s.BlockedListOperations[key] = append(s.BlockedListOperations[key], resultChan)
+	}
+
+	s.mu.Unlock()
+	var timer <-chan time.Time
+	if timeout > 0 {
+		timer = time.After(timeout)
+	} else {
+		timer = make(<-chan time.Time)
+	}
+
+	select {
+	case result := <-resultChan:
+		cleanupFunc()
+		return result.key, result.value, nil
+	case <-timer:
+		cleanupFunc()
+		return "", "", nil
+	}
+}
+
 func (s *InMemoryStore) LLen(key string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

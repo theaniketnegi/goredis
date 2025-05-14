@@ -191,7 +191,7 @@ func (s *InMemoryStore) RPop(key string) (string, error) {
 	}
 	return value.(string), nil
 }
-func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, string, error) {
+func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration, popFromRight bool) (string, string, error) {
 	s.mu.Lock()
 
 	for _, key := range keys {
@@ -204,13 +204,18 @@ func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, str
 
 	for _, key := range keys {
 		if _, ok := s.ListKV[key]; ok {
-			value := s.ListKV[key].Remove(s.ListKV[key].Front())
+			var value string
+			if popFromRight {
+				value = s.ListKV[key].Remove(s.ListKV[key].Back()).(string)
+			} else {
+				value = s.ListKV[key].Remove(s.ListKV[key].Front()).(string)
+			}
 			if s.ListKV[key].Len() == 0 {
 				delete(s.ListKV, key)
 				delete(s.KeyType, key)
 			}
 			s.mu.Unlock()
-			return key, value.(string), nil
+			return key, value, nil
 		}
 	}
 
@@ -233,9 +238,17 @@ func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, str
 			}
 		}
 	}
+
+	var operationType BlockingOperationType
+	if popFromRight {
+		operationType = BRPop
+	} else {
+		operationType = BLPop
+	}
+
 	operationInfo := OperationInfo{
 		Client:        resultChan,
-		OperationType: BLPop,
+		OperationType: operationType,
 	}
 	for _, key := range keys {
 		s.BlockedListOperations[key] = append(s.BlockedListOperations[key], operationInfo)

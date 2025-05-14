@@ -482,7 +482,38 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				duration = time.Duration(timeout * float64(time.Second))
 			}
 
-			key, value, err := store.BLPop(keys, duration)
+			key, value, err := store.BLPop(keys, duration, false)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+
+			if value == "" {
+				conn.Write([]byte("_\r\n"))
+				continue
+			}
+
+			conn.Write(fmt.Appendf(nil, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(value), value))
+		case "BRPOP":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'brpop' command\r\n"))
+				continue
+			}
+
+			keys := args[:len(args)-1]
+			var duration time.Duration
+			if args[len(args)-1] == "0" {
+				duration = time.Duration(0 * time.Second)
+			} else {
+				timeout, err := strconv.ParseFloat(args[len(args)-1], 64)
+				if err != nil || timeout < 0 {
+					conn.Write([]byte("-ERR timeout is not a float or out of range\r\n"))
+					continue
+				}
+				duration = time.Duration(timeout * float64(time.Second))
+			}
+
+			key, value, err := store.BLPop(keys, duration, true)
 			if err != nil {
 				conn.Write([]byte(err.Error() + "\r\n"))
 				continue

@@ -658,7 +658,7 @@ func (s *InMemoryStore) NumKeyExists(keys []string, shouldDelete bool) int {
 	return count
 }
 
-func (s *InMemoryStore) SAdd (key string, value string) (int, error){
+func (s *InMemoryStore) SAdd(key string, value string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -678,6 +678,81 @@ func (s *InMemoryStore) SAdd (key string, value string) (int, error){
 	}
 	return 0, nil
 }
+func (s *InMemoryStore) SRem(key string, value string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return 0, nil
+	}
+
+	if _, ok := s.SetKV[key][value]; ok {
+		delete(s.SetKV[key], value)
+		if len(s.SetKV[key]) == 0 {
+			delete(s.SetKV, key)
+			delete(s.KeyType, key)
+		}
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func (s *InMemoryStore) SIsMember(key string, value string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return 0, nil
+	}
+
+	if _, ok := s.SetKV[key][value]; ok {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func (s *InMemoryStore) SInter(keys []string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	elementsFreq := make(map[string]int)
+
+	for _, key := range keys {
+		keyType, ok := s.KeyType[key]
+		if ok && keyType != SetType {
+			return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+
+		if _, ok := s.SetKV[key]; !ok {
+			return nil, nil
+		}
+
+		for element := range s.SetKV[key] {
+			elementsFreq[element]++
+		}
+	}
+
+	var result []string
+	for element, freq := range elementsFreq {
+		if freq == len(keys) {
+			result = append(result, element)
+		}
+	}
+	return result, nil
+}
+
+
+
 func (s *InMemoryStore) BackgroundKeyCleanup(sleepTime time.Duration) {
 	go func() {
 		for {

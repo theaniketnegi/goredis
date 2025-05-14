@@ -785,6 +785,51 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				addedValues += returnedVal
 			}
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", addedValues))
+		case "SREM":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'srem' command\r\n"))
+				continue
+			}
+			removedValues := 0
+			for _, val := range args[1:] {
+				returnedVal, err := store.SRem(args[0], val)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				removedValues += returnedVal
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", removedValues))
+		case "SISMEMBER":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'sismember' command\r\n"))
+				continue
+			}
+
+			returnedVal, err := store.SIsMember(args[0], args[1])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", returnedVal))
+		case "SINTER":
+			if len(args) < 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'sinter' command\r\n"))
+				continue
+			}
+
+			intersectedValues, err := store.SInter(args)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(intersectedValues)))
+			for _, val := range intersectedValues {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

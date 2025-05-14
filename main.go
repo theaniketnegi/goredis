@@ -239,7 +239,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 		case "KEYS":
 			if len(args) != 1 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'keys' command\r\n"))
-				return
+				continue
 			}
 			pattern := args[0]
 			matchedKeys := store.GetKeys(parsePattern(pattern))

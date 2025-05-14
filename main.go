@@ -394,12 +394,10 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			for i := 1; i < len(args); i++ {
-				err := store.LPush(args[0], args[i])
-				if err != nil {
-					conn.Write([]byte(err.Error() + "\r\n"))
-					continue
-				}
+			err := store.LPush(args[0], args[1:])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
 			}
 
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args)-1))
@@ -409,12 +407,10 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			for i := 1; i < len(args); i++ {
-				err := store.RPush(args[0], args[i])
-				if err != nil {
-					conn.Write([]byte(err.Error() + "\r\n"))
-					continue
-				}
+			err := store.RPush(args[0], args[1:])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
 			}
 
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args)-1))

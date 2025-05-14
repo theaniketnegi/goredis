@@ -846,6 +846,30 @@ func (s *InMemoryStore) SMove(source string, destination string, value string) (
 	return 0, nil
 }
 
+func (s *InMemoryStore) SPop(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return "", nil
+	}
+
+	for element := range s.SetKV[key] {
+		delete(s.SetKV[key], element)
+		if len(s.SetKV[key]) == 0 {
+			delete(s.SetKV, key)
+			delete(s.KeyType, key)
+		}
+		return element, nil
+	}
+	return "", nil
+}
+
 func (s *InMemoryStore) BackgroundKeyCleanup(sleepTime time.Duration) {
 	go func() {
 		for {

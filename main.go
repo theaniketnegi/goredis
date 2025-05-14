@@ -888,6 +888,69 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", retunedVal))
+		case "SPOP":
+			if len(args) < 1 || len(args) > 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'spop' command\r\n"))
+				continue
+			}
+
+			if len(args) == 1 {
+				key := args[0]
+				val, err := store.SPop(key)
+
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+
+				if val == "" {
+					conn.Write([]byte("_\r\n"))
+					continue
+				}
+
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+			} else {
+				count, err := strconv.Atoi(args[1])
+				if err != nil || count <= 0 {
+					conn.Write([]byte("-ERR value is out of range, must be positive\r\n"))
+					continue
+				}
+				key := args[0]
+				size, err := store.SCard(key)
+
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+
+				if size == 0 {
+					conn.Write([]byte("_\r\n"))
+					continue
+				}
+
+				count = min(count, size)
+				var values []string
+				for range count {
+					val, err := store.SPop(key)
+					if err != nil {
+						conn.Write([]byte(err.Error() + "\r\n"))
+						continue
+					}
+					if val == "" {
+						conn.Write([]byte("_\r\n"))
+						continue
+					}
+					values = append(values, val)
+				}
+
+				var resp strings.Builder
+				resp.WriteString(fmt.Sprintf("*%d\r\n", len(values)))
+				for _, val := range values {
+					resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+				}
+				conn.Write([]byte(resp.String()))
+			}
+
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

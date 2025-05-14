@@ -652,6 +652,93 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+		case "BLMOVE":
+			if len(args) != 5 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'blmove' command\r\n"))
+				continue
+			}
+
+			sourceKey := args[0]
+			destinationKey := args[1]
+			uppercaseSrcFlag := strings.ToUpper(args[2])
+			uppercaseDestFlag := strings.ToUpper(args[3])
+			timeoutStr := args[4]
+
+			if uppercaseSrcFlag != "LEFT" && uppercaseSrcFlag != "RIGHT" {
+				conn.Write([]byte("-ERR syntax error\r\n"))
+				continue
+			}
+			if uppercaseDestFlag != "LEFT" && uppercaseDestFlag != "RIGHT" {
+				conn.Write([]byte("-ERR syntax error\r\n"))
+				continue
+			}
+
+			var duration time.Duration
+			if timeoutStr == "0" {
+				duration = time.Duration(0 * time.Second)
+			} else {
+				timeout, err := strconv.ParseFloat(timeoutStr, 64)
+				if err != nil || timeout < 0 {
+					conn.Write([]byte("-ERR timeout is not a float or out of range\r\n"))
+					continue
+				}
+				duration = time.Duration(timeout * float64(time.Second))
+			}
+
+			if uppercaseSrcFlag == "LEFT" {
+				if uppercaseDestFlag == "LEFT" {
+					val, err := store.BLMove(sourceKey, destinationKey, true, true, duration)
+					if err != nil {
+						conn.Write([]byte(err.Error() + "\r\n"))
+						continue
+					}
+					if val == "" {
+						conn.Write([]byte("_\r\n"))
+						continue
+					}
+
+					conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+					continue
+				}
+				val, err := store.BLMove(sourceKey, destinationKey, true, false, duration)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+
+				if val == "" {
+					conn.Write([]byte("_\r\n"))
+					continue
+				}
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+				continue
+			}
+			if uppercaseDestFlag == "LEFT" {
+				val, err := store.BLMove(sourceKey, destinationKey, false, true, duration)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				if val == "" {
+					conn.Write([]byte("_\r\n"))
+					continue
+				}
+
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+				continue
+			}
+			val, err := store.BLMove(sourceKey, destinationKey, false, false, duration)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			if val == "" {
+				conn.Write([]byte("_\r\n"))
+				continue
+			}
+
+			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

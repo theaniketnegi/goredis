@@ -27,14 +27,29 @@ const (
 	SortedSetType
 )
 
+type BlockingOperationType int
+
+const (
+	BLPop BlockingOperationType = iota
+	BRPop
+	BLMove
+)
+
 type InMemoryStore struct {
 	KeyType               map[string]StoreType
 	StringKV              map[string]StoreValue
 	ListKV                map[string]*list.List
-	BlockedListOperations map[string][]chan ListElement
+	BlockedListOperations map[string][]OperationInfo
 	mu                    sync.RWMutex
 }
 
+type OperationInfo struct {
+	Client        chan ListElement
+	OperationType BlockingOperationType
+
+	// for BLMove
+	PopFromLeft bool
+}
 type ListElement struct {
 	key   string
 	value string
@@ -45,7 +60,7 @@ func NewInMemoryStore() *InMemoryStore {
 		KeyType:               make(map[string]StoreType),
 		StringKV:              make(map[string]StoreValue),
 		ListKV:                make(map[string]*list.List),
-		BlockedListOperations: make(map[string][]chan ListElement),
+		BlockedListOperations: make(map[string][]OperationInfo),
 	}
 	s.BackgroundKeyCleanup(15000)
 	return s
@@ -73,16 +88,24 @@ func (s *InMemoryStore) LPush(key string, values []string) error {
 		s.ListKV[key].PushFront(value)
 	}
 
-	if clients, isBlocked := s.BlockedListOperations[key]; isBlocked {
-		client := clients[0]
-		value := s.ListKV[key].Remove(s.ListKV[key].Front()).(string)
+	if requests, isBlocked := s.BlockedListOperations[key]; isBlocked {
+		opInfo := requests[0]
+		var value string
+
+		if opInfo.OperationType == BRPop || (opInfo.OperationType == BLMove && !opInfo.PopFromLeft) {
+			value = s.ListKV[key].Remove(s.ListKV[key].Back()).(string)
+		} else if opInfo.OperationType == BLPop || (opInfo.OperationType == BLMove && opInfo.PopFromLeft) {
+			value = s.ListKV[key].Remove(s.ListKV[key].Front()).(string)
+		}
+
 		if s.ListKV[key].Len() == 0 {
 			delete(s.ListKV, key)
 			delete(s.KeyType, key)
 		}
-		client <- ListElement{key: key, value: value}
-		if len(clients) > 1 {
-			s.BlockedListOperations[key] = clients[1:]
+
+		opInfo.Client <- ListElement{key: key, value: value}
+		if len(requests) > 1 {
+			s.BlockedListOperations[key] = requests[1:]
 		} else {
 			delete(s.BlockedListOperations, key)
 		}
@@ -107,17 +130,24 @@ func (s *InMemoryStore) RPush(key string, values []string) error {
 		s.ListKV[key].PushBack(value)
 	}
 
-	if clients, isBlocked := s.BlockedListOperations[key]; isBlocked {
-		client := clients[0]
-		value := s.ListKV[key].Remove(s.ListKV[key].Front()).(string)
+	if requests, isBlocked := s.BlockedListOperations[key]; isBlocked {
+		opInfo := requests[0]
+		var value string
+
+		if opInfo.OperationType == BRPop || (opInfo.OperationType == BLMove && !opInfo.PopFromLeft) {
+			value = s.ListKV[key].Remove(s.ListKV[key].Back()).(string)
+		} else if opInfo.OperationType == BLPop || (opInfo.OperationType == BLMove && opInfo.PopFromLeft) {
+			value = s.ListKV[key].Remove(s.ListKV[key].Front()).(string)
+		}
+
 		if s.ListKV[key].Len() == 0 {
 			delete(s.ListKV, key)
 			delete(s.KeyType, key)
 		}
 
-		client <- ListElement{key: key, value: value}
-		if len(clients) > 1 {
-			s.BlockedListOperations[key] = clients[1:]
+		opInfo.Client <- ListElement{key: key, value: value}
+		if len(requests) > 1 {
+			s.BlockedListOperations[key] = requests[1:]
 		} else {
 			delete(s.BlockedListOperations, key)
 		}
@@ -161,7 +191,7 @@ func (s *InMemoryStore) RPop(key string) (string, error) {
 	}
 	return value.(string), nil
 }
-func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, string, error) {
+func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration, popFromRight bool) (string, string, error) {
 	s.mu.Lock()
 
 	for _, key := range keys {
@@ -174,13 +204,18 @@ func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, str
 
 	for _, key := range keys {
 		if _, ok := s.ListKV[key]; ok {
-			value := s.ListKV[key].Remove(s.ListKV[key].Front())
+			var value string
+			if popFromRight {
+				value = s.ListKV[key].Remove(s.ListKV[key].Back()).(string)
+			} else {
+				value = s.ListKV[key].Remove(s.ListKV[key].Front()).(string)
+			}
 			if s.ListKV[key].Len() == 0 {
 				delete(s.ListKV, key)
 				delete(s.KeyType, key)
 			}
 			s.mu.Unlock()
-			return key, value.(string), nil
+			return key, value, nil
 		}
 	}
 
@@ -191,8 +226,8 @@ func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, str
 		defer s.mu.Unlock()
 
 		for _, key := range keys {
-			for i, channel := range s.BlockedListOperations[key] {
-				if channel == resultChan {
+			for i, opInfo := range s.BlockedListOperations[key] {
+				if opInfo.Client == resultChan {
 					s.BlockedListOperations[key] = slices.Delete(s.BlockedListOperations[key], i, i+1)
 					break
 				}
@@ -204,8 +239,19 @@ func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, str
 		}
 	}
 
+	var operationType BlockingOperationType
+	if popFromRight {
+		operationType = BRPop
+	} else {
+		operationType = BLPop
+	}
+
+	operationInfo := OperationInfo{
+		Client:        resultChan,
+		OperationType: operationType,
+	}
 	for _, key := range keys {
-		s.BlockedListOperations[key] = append(s.BlockedListOperations[key], resultChan)
+		s.BlockedListOperations[key] = append(s.BlockedListOperations[key], operationInfo)
 	}
 
 	s.mu.Unlock()
@@ -223,6 +269,97 @@ func (s *InMemoryStore) BLPop(keys []string, timeout time.Duration) (string, str
 	case <-timer:
 		cleanupFunc()
 		return "", "", nil
+	}
+}
+
+func (s *InMemoryStore) BLMove(source string, destination string, leftSrc bool, leftDest bool, timeout time.Duration) (string, error) {
+	s.mu.Lock()
+
+	srcKeyType, ok := s.KeyType[source]
+	if ok && srcKeyType != ListType {
+		s.mu.Unlock()
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	destKeyType, ok := s.KeyType[destination]
+	if ok && destKeyType != ListType {
+		s.mu.Unlock()
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.ListKV[destination]; !ok {
+		s.ListKV[destination] = NewList()
+		s.KeyType[destination] = ListType
+	}
+
+	if _, ok := s.ListKV[source]; ok {
+		var value string
+		if leftSrc {
+			value = s.ListKV[source].Remove(s.ListKV[source].Front()).(string)
+		} else {
+			value = s.ListKV[source].Remove(s.ListKV[source].Back()).(string)
+		}
+		if s.ListKV[source].Len() == 0 {
+			delete(s.ListKV, source)
+			delete(s.KeyType, source)
+		}
+		if leftDest {
+			s.ListKV[destination].PushFront(value)
+		} else {
+			s.ListKV[destination].PushBack(value)
+		}
+
+		s.mu.Unlock()
+		return value, nil
+	}
+
+	resultChan := make(chan ListElement, 1)
+
+	cleanupFunc := func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		for i, opInfo := range s.BlockedListOperations[source] {
+			if opInfo.Client == resultChan {
+				s.BlockedListOperations[source] = slices.Delete(s.BlockedListOperations[source], i, i+1)
+				break
+			}
+		}
+
+		if len(s.BlockedListOperations[source]) == 0 {
+			delete(s.BlockedListOperations, source)
+		}
+	}
+	operationInfo := OperationInfo{
+		Client:        resultChan,
+		OperationType: BLMove,
+		PopFromLeft:   leftSrc,
+	}
+	s.BlockedListOperations[source] = append(s.BlockedListOperations[source], operationInfo)
+
+	s.mu.Unlock()
+	var timer <-chan time.Time
+	if timeout > 0 {
+		timer = time.After(timeout)
+	} else {
+		timer = make(<-chan time.Time)
+	}
+
+	select {
+	case result := <-resultChan:
+		cleanupFunc()
+
+		s.mu.Lock()
+		if leftDest {
+			s.ListKV[destination].PushFront(result.value)
+		} else {
+			s.ListKV[destination].PushBack(result.value)
+		}
+		s.mu.Unlock()
+		return result.value, nil
+	case <-timer:
+		cleanupFunc()
+		return "", nil
 	}
 }
 

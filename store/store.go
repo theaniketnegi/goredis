@@ -751,7 +751,100 @@ func (s *InMemoryStore) SInter(keys []string) ([]string, error) {
 	return result, nil
 }
 
+func (s *InMemoryStore) SCard(key string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return 0, nil
+	}
+
+	return len(s.SetKV[key]), nil
+}
+
+func (s *InMemoryStore) SMembers(key string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return nil, nil
+	}
+
+	var members []string
+	for member := range s.SetKV[key] {
+		members = append(members, member)
+	}
+	return members, nil
+}
+
+func (s *InMemoryStore) SUnion(keys []string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	elements := make(map[string]struct{})
+
+	for _, key := range keys {
+		keyType, ok := s.KeyType[key]
+		if ok && keyType != SetType {
+			return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+
+		if _, ok := s.SetKV[key]; !ok {
+			continue
+		}
+
+		for element := range s.SetKV[key] {
+			elements[element] = struct{}{}
+		}
+	}
+
+	var result []string
+	for element := range elements {
+		result = append(result, element)
+	}
+	return result, nil
+}
+
+func (s *InMemoryStore) SMove(source string, destination string, value string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	srcType, ok := s.KeyType[source]
+	if ok && srcType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	destType, ok := s.KeyType[destination]
+	if ok && destType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[source]; !ok {
+		return 0, nil
+	}
+
+	if _, ok := s.SetKV[destination]; !ok {
+		s.SetKV[destination] = make(map[string]struct{})
+		s.KeyType[destination] = SetType
+	}
+
+	if _, ok := s.SetKV[source][value]; ok {
+		delete(s.SetKV[source], value)
+		s.SetKV[destination][value] = struct{}{}
+		return 1, nil
+	}
+	return 0, nil
+}
 
 func (s *InMemoryStore) BackgroundKeyCleanup(sleepTime time.Duration) {
 	go func() {

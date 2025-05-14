@@ -824,12 +824,70 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			var resp strings.Builder
-			resp.WriteString(fmt.Sprintf("*%d\r\n", len(intersectedValues)))
+			resp.WriteString(fmt.Sprintf("~%d\r\n", len(intersectedValues)))
 			for _, val := range intersectedValues {
 				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
 			}
 			conn.Write([]byte(resp.String()))
-		
+		case "SCARD":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'scard' command\r\n"))
+				continue
+			}
+			cardinality, err := store.SCard(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", cardinality))
+		case "SMEMBERS":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'smembers' command\r\n"))
+				continue
+			}
+			members, err := store.SMembers(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("~%d\r\n", len(members)))
+			for _, val := range members {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "SUNION":
+			if len(args) < 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'sunion' command\r\n"))
+				continue
+			}
+			unionedValues, err := store.SUnion(args)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("~%d\r\n", len(unionedValues)))
+			for _, val := range unionedValues {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "SMOVE":
+			if len(args) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'smove' command\r\n"))
+				continue
+			}
+			srcKey := args[0]
+			destKey := args[1]
+			member := args[2]
+
+			retunedVal, err := store.SMove(srcKey, destKey, member)
+
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", retunedVal))
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

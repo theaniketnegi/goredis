@@ -769,7 +769,22 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+		case "SADD":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'sadd' command\r\n"))
+				continue
+			}
 
+			addedValues := 0
+			for _, val := range args[1:] {
+				returnedVal, err := store.SAdd(args[0], val)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				addedValues += returnedVal
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", addedValues))
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

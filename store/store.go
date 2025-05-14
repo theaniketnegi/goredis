@@ -39,6 +39,7 @@ type InMemoryStore struct {
 	KeyType               map[string]StoreType
 	StringKV              map[string]StoreValue
 	ListKV                map[string]*list.List
+	SetKV                 map[string]map[string]struct{}
 	BlockedListOperations map[string][]OperationInfo
 	mu                    sync.RWMutex
 }
@@ -60,6 +61,7 @@ func NewInMemoryStore() *InMemoryStore {
 		KeyType:               make(map[string]StoreType),
 		StringKV:              make(map[string]StoreValue),
 		ListKV:                make(map[string]*list.List),
+		SetKV:                 make(map[string]map[string]struct{}),
 		BlockedListOperations: make(map[string][]OperationInfo),
 	}
 	s.BackgroundKeyCleanup(15000)
@@ -656,6 +658,26 @@ func (s *InMemoryStore) NumKeyExists(keys []string, shouldDelete bool) int {
 	return count
 }
 
+func (s *InMemoryStore) SAdd (key string, value string) (int, error){
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		s.SetKV[key] = make(map[string]struct{})
+		s.KeyType[key] = SetType
+	}
+
+	if _, ok := s.SetKV[key][value]; !ok {
+		s.SetKV[key][value] = struct{}{}
+		return 1, nil
+	}
+	return 0, nil
+}
 func (s *InMemoryStore) BackgroundKeyCleanup(sleepTime time.Duration) {
 	go func() {
 		for {

@@ -55,7 +55,7 @@ func NewList() *list.List {
 	return list.New()
 }
 
-func (s *InMemoryStore) LPush(key string, value string) error {
+func (s *InMemoryStore) LPush(key string, values []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -64,8 +64,22 @@ func (s *InMemoryStore) LPush(key string, value string) error {
 		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
 
+	if _, ok := s.ListKV[key]; !ok {
+		s.ListKV[key] = NewList()
+		s.KeyType[key] = ListType
+	}
+
+	for _, value := range values {
+		s.ListKV[key].PushFront(value)
+	}
+
 	if clients, isBlocked := s.BlockedListOperations[key]; isBlocked {
 		client := clients[0]
+		value := s.ListKV[key].Remove(s.ListKV[key].Front()).(string)
+		if s.ListKV[key].Len() == 0 {
+			delete(s.ListKV, key)
+			delete(s.KeyType, key)
+		}
 		client <- ListElement{key: key, value: value}
 		if len(clients) > 1 {
 			s.BlockedListOperations[key] = clients[1:]
@@ -75,23 +89,32 @@ func (s *InMemoryStore) LPush(key string, value string) error {
 		return nil
 	}
 
-	if _, ok := s.ListKV[key]; !ok {
-		s.ListKV[key] = NewList()
-		s.KeyType[key] = ListType
-	}
-
-	s.ListKV[key].PushFront(value)
 	return nil
 }
-func (s *InMemoryStore) RPush(key string, value string) error {
+func (s *InMemoryStore) RPush(key string, values []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	keyType, ok := s.KeyType[key]
 	if ok && keyType != ListType {
 		return errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
+	if _, ok := s.ListKV[key]; !ok {
+		s.ListKV[key] = NewList()
+		s.KeyType[key] = ListType
+	}
+
+	for _, value := range values {
+		s.ListKV[key].PushBack(value)
+	}
+
 	if clients, isBlocked := s.BlockedListOperations[key]; isBlocked {
 		client := clients[0]
+		value := s.ListKV[key].Remove(s.ListKV[key].Front()).(string)
+		if s.ListKV[key].Len() == 0 {
+			delete(s.ListKV, key)
+			delete(s.KeyType, key)
+		}
+
 		client <- ListElement{key: key, value: value}
 		if len(clients) > 1 {
 			s.BlockedListOperations[key] = clients[1:]
@@ -101,11 +124,6 @@ func (s *InMemoryStore) RPush(key string, value string) error {
 		return nil
 	}
 
-	if _, ok := s.ListKV[key]; !ok {
-		s.ListKV[key] = NewList()
-		s.KeyType[key] = ListType
-	}
-	s.ListKV[key].PushBack(value)
 	return nil
 }
 func (s *InMemoryStore) LPop(key string) (string, error) {

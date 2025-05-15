@@ -180,7 +180,13 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			conn.Write([]byte(store.StringSet(args[0], args[1], expiry, nx, xx, ttl, get)))
+			returnedVal, err := store.StringSet(args[0], args[1], expiry, nx, xx, ttl, get)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+
+			conn.Write([]byte(returnedVal))
 		case "DEL":
 			if len(args) == 0 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'del' command\r\n"))
@@ -203,7 +209,12 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 
-			storeVal, ok, _ := store.StringGet(args[0])
+			storeVal, ok, err := store.StringGet(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+
 			if !ok {
 				conn.Write([]byte(":-2\r\n"))
 				continue
@@ -352,22 +363,38 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				continue
 			}
 			if !ok {
-				store.StringSet(args[0], args[1], nil, false, false, false, false)
+				_, err := store.StringSet(args[0], args[1], nil, false, false, false, false)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
 				conn.Write(fmt.Appendf(nil, ":%d\r\n", len(args[1])))
 				continue
 			}
 
-			store.StringSet(args[0], storeVal.Value+args[1], nil, false, false, false, false)
+			_, err = store.StringSet(args[0], storeVal.Value+args[1], nil, false, false, false, false)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+
 			conn.Write(fmt.Appendf(nil, ":%d\r\n", len(storeVal.Value+args[1])))
 		case "MSET":
 			if len(args) < 2 || len(args)%2 != 0 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'mset' command\r\n"))
 				continue
 			}
+
 			for i := 0; i < len(args); i += 2 {
-				store.StringSet(args[i], args[i+1], nil, false, false, false, false)
+				_, err := store.StringSet(args[i], args[i+1], nil, false, false, false, false)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					goto func_exit_mset
+				}
 			}
 			conn.Write([]byte("+OK\r\n"))
+		func_exit_mset:
+			continue
 		case "MGET":
 			if len(args) == 0 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'mget' command\r\n"))
@@ -379,7 +406,7 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				storeVal, ok, err := store.StringGet(key)
 				if err != nil {
 					conn.Write([]byte(err.Error() + "\r\n"))
-					continue
+					goto func_exit_mget
 				}
 				if !ok {
 					resp.WriteString("$-1\r\n")
@@ -388,6 +415,8 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(storeVal.Value), storeVal.Value))
 			}
 			conn.Write([]byte(resp.String()))
+		func_exit_mget:
+			continue
 		case "LPUSH":
 			if len(args) < 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'lpush' command\r\n"))
@@ -449,20 +478,22 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			var poppedValues []string
+			var resp strings.Builder
 			for range count {
 				val, err := store.LPop(args[0])
 				if err != nil {
 					conn.Write([]byte(err.Error() + "\r\n"))
-					continue
+					goto func_exit_lpop
 				}
 				poppedValues = append(poppedValues, val)
 			}
-			var resp strings.Builder
 			resp.WriteString(fmt.Sprintf("*%d\r\n", len(poppedValues)))
 			for _, val := range poppedValues {
 				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
 			}
 			conn.Write([]byte(resp.String()))
+		func_exit_lpop:
+			continue
 		case "BLPOP":
 			if len(args) < 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'blpop' command\r\n"))
@@ -560,20 +591,23 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			var poppedValues []string
+			var resp strings.Builder
+
 			for range count {
 				val, err := store.RPop(args[0])
 				if err != nil {
 					conn.Write([]byte(err.Error() + "\r\n"))
-					continue
+					goto func_exit_rpop
 				}
 				poppedValues = append(poppedValues, val)
 			}
-			var resp strings.Builder
 			resp.WriteString(fmt.Sprintf("*%d\r\n", len(poppedValues)))
 			for _, val := range poppedValues {
 				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
 			}
 			conn.Write([]byte(resp.String()))
+		func_exit_rpop:
+			continue
 		case "LLEN":
 			if len(args) != 1 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'llen' command\r\n"))
@@ -769,7 +803,252 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			}
 
 			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+		case "SADD":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'sadd' command\r\n"))
+				continue
+			}
 
+			addedValues := 0
+			for _, val := range args[1:] {
+				returnedVal, err := store.SAdd(args[0], val)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					goto func_exit_sadd
+				}
+				addedValues += returnedVal
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", addedValues))
+		func_exit_sadd:
+			continue
+		case "SREM":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'srem' command\r\n"))
+				continue
+			}
+			removedValues := 0
+			for _, val := range args[1:] {
+				returnedVal, err := store.SRem(args[0], val)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					goto func_exit_srem
+				}
+				removedValues += returnedVal
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", removedValues))
+		func_exit_srem:
+			continue
+		case "SISMEMBER":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'sismember' command\r\n"))
+				continue
+			}
+
+			returnedVal, err := store.SIsMember(args[0], args[1])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", returnedVal))
+		case "SINTER":
+			if len(args) < 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'sinter' command\r\n"))
+				continue
+			}
+
+			intersectedValues, err := store.SInter(args)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("~%d\r\n", len(intersectedValues)))
+			for _, val := range intersectedValues {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "SCARD":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'scard' command\r\n"))
+				continue
+			}
+			cardinality, err := store.SCard(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", cardinality))
+		case "SMEMBERS":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'smembers' command\r\n"))
+				continue
+			}
+			members, err := store.SMembers(args[0])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("~%d\r\n", len(members)))
+			for _, val := range members {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "SUNION":
+			if len(args) < 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'sunion' command\r\n"))
+				continue
+			}
+			unionedValues, err := store.SUnion(args)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("~%d\r\n", len(unionedValues)))
+			for _, val := range unionedValues {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		case "SMOVE":
+			if len(args) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'smove' command\r\n"))
+				continue
+			}
+			srcKey := args[0]
+			destKey := args[1]
+			member := args[2]
+
+			returnedVal, err := store.SMove(srcKey, destKey, member)
+
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", returnedVal))
+		case "SPOP":
+			if len(args) < 1 || len(args) > 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'spop' command\r\n"))
+				continue
+			}
+
+			if len(args) == 1 {
+				key := args[0]
+				val, err := store.SPop(key)
+
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+
+				if val == "" {
+					conn.Write([]byte("_\r\n"))
+					continue
+				}
+
+				conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+			} else {
+				count, err := strconv.Atoi(args[1])
+				if err != nil || count <= 0 {
+					conn.Write([]byte("-ERR value is out of range, must be positive\r\n"))
+					continue
+				}
+				key := args[0]
+				size, err := store.SCard(key)
+
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+
+				if size == 0 {
+					conn.Write([]byte("_\r\n"))
+					continue
+				}
+
+				count = min(count, size)
+				var values []string
+				var resp strings.Builder
+
+				for range count {
+					val, err := store.SPop(key)
+					if err != nil {
+						conn.Write([]byte(err.Error() + "\r\n"))
+						goto func_exit_spop
+					}
+					if val == "" {
+						conn.Write([]byte("_\r\n"))
+						continue
+					}
+					values = append(values, val)
+				}
+
+				resp.WriteString(fmt.Sprintf("*%d\r\n", len(values)))
+				for _, val := range values {
+					resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+				}
+				conn.Write([]byte(resp.String()))
+			func_exit_spop:
+				continue
+			}
+		case "HSET":
+			if len(args) < 3 || len(args)%2 == 0 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hset' command\r\n"))
+				continue
+			}
+
+			newFields := 0
+			key := args[0]
+			for i := 1; i < len(args); i += 2 {
+				returnedVal, err := store.HSet(key, args[i], args[i+1])
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					continue
+				}
+				newFields += returnedVal
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", newFields))
+		case "HGET":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hget' command\r\n"))
+				continue
+			}
+
+			key := args[0]
+			field := args[1]
+			val, err := store.HGet(key, field)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			if val == "" {
+				conn.Write([]byte("$-1\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, "$%d\r\n%s\r\n", len(val), val))
+		case "HMGET":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hmget' command\r\n"))
+				continue
+			}
+			key := args[0]
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(args)-1))
+			for _, field := range args[1:] {
+				val, err := store.HGet(key, field)
+				if err != nil {
+					conn.Write([]byte(err.Error() + "\r\n"))
+					goto func_exit_hmget
+				}
+				if val == "" {
+					resp.WriteString("$-1\r\n")
+					continue
+				}
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+		func_exit_hmget:
+			continue
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}

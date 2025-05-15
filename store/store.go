@@ -39,6 +39,8 @@ type InMemoryStore struct {
 	KeyType               map[string]StoreType
 	StringKV              map[string]StoreValue
 	ListKV                map[string]*list.List
+	SetKV                 map[string]map[string]struct{}
+	HashSetKV             map[string]map[string]string
 	BlockedListOperations map[string][]OperationInfo
 	mu                    sync.RWMutex
 }
@@ -60,6 +62,8 @@ func NewInMemoryStore() *InMemoryStore {
 		KeyType:               make(map[string]StoreType),
 		StringKV:              make(map[string]StoreValue),
 		ListKV:                make(map[string]*list.List),
+		SetKV:                 make(map[string]map[string]struct{}),
+		HashSetKV:             make(map[string]map[string]string),
 		BlockedListOperations: make(map[string][]OperationInfo),
 	}
 	s.BackgroundKeyCleanup(15000)
@@ -537,13 +541,13 @@ func (s *InMemoryStore) StringGet(key string) (StoreValue, bool, error) {
 	return value, ok, nil
 }
 
-func (s *InMemoryStore) StringSet(key string, value string, expiry *time.Time, nx bool, xx bool, ttl bool, get bool) string {
+func (s *InMemoryStore) StringSet(key string, value string, expiry *time.Time, nx bool, xx bool, ttl bool, get bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	keyType, ok := s.KeyType[key]
 	if ok && keyType != StringType {
-		return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
 
 	oldVal, ok := s.StringKV[key]
@@ -553,11 +557,11 @@ func (s *InMemoryStore) StringSet(key string, value string, expiry *time.Time, n
 		ok = false
 	}
 	if nx && ok {
-		return "_\r\n"
+		return "_\r\n", nil
 	}
 
 	if xx && !ok {
-		return "_\r\n"
+		return "_\r\n", nil
 	}
 
 	if ttl {
@@ -572,13 +576,13 @@ func (s *InMemoryStore) StringSet(key string, value string, expiry *time.Time, n
 	s.KeyType[key] = StringType
 	if get {
 		if ok {
-			return fmt.Sprintf("$%d\r\n%s\r\n", len(oldVal.Value), oldVal.Value)
+			return fmt.Sprintf("$%d\r\n%s\r\n", len(oldVal.Value), oldVal.Value), nil
 		} else {
-			return "_\r\n"
+			return "_\r\n", nil
 		}
 	}
 
-	return "+OK\r\n"
+	return "+OK\r\n", nil
 }
 
 func (s *InMemoryStore) GetKeys(pattern string) []string {
@@ -654,6 +658,258 @@ func (s *InMemoryStore) NumKeyExists(keys []string, shouldDelete bool) int {
 	}
 
 	return count
+}
+
+func (s *InMemoryStore) SAdd(key string, value string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		s.SetKV[key] = make(map[string]struct{})
+		s.KeyType[key] = SetType
+	}
+
+	if _, ok := s.SetKV[key][value]; !ok {
+		s.SetKV[key][value] = struct{}{}
+		return 1, nil
+	}
+	return 0, nil
+}
+func (s *InMemoryStore) SRem(key string, value string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return 0, nil
+	}
+
+	if _, ok := s.SetKV[key][value]; ok {
+		delete(s.SetKV[key], value)
+		if len(s.SetKV[key]) == 0 {
+			delete(s.SetKV, key)
+			delete(s.KeyType, key)
+		}
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func (s *InMemoryStore) SIsMember(key string, value string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return 0, nil
+	}
+
+	if _, ok := s.SetKV[key][value]; ok {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func (s *InMemoryStore) SInter(keys []string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	elementsFreq := make(map[string]int)
+
+	for _, key := range keys {
+		keyType, ok := s.KeyType[key]
+		if ok && keyType != SetType {
+			return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+
+		if _, ok := s.SetKV[key]; !ok {
+			return nil, nil
+		}
+
+		for element := range s.SetKV[key] {
+			elementsFreq[element]++
+		}
+	}
+
+	var result []string
+	for element, freq := range elementsFreq {
+		if freq == len(keys) {
+			result = append(result, element)
+		}
+	}
+	return result, nil
+}
+
+func (s *InMemoryStore) SCard(key string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return 0, nil
+	}
+
+	return len(s.SetKV[key]), nil
+}
+
+func (s *InMemoryStore) SMembers(key string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return nil, nil
+	}
+
+	var members []string
+	for member := range s.SetKV[key] {
+		members = append(members, member)
+	}
+	return members, nil
+}
+
+func (s *InMemoryStore) SUnion(keys []string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	elements := make(map[string]struct{})
+
+	for _, key := range keys {
+		keyType, ok := s.KeyType[key]
+		if ok && keyType != SetType {
+			return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+
+		if _, ok := s.SetKV[key]; !ok {
+			continue
+		}
+
+		for element := range s.SetKV[key] {
+			elements[element] = struct{}{}
+		}
+	}
+
+	var result []string
+	for element := range elements {
+		result = append(result, element)
+	}
+	return result, nil
+}
+
+func (s *InMemoryStore) SMove(source string, destination string, value string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	srcType, ok := s.KeyType[source]
+	if ok && srcType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	destType, ok := s.KeyType[destination]
+	if ok && destType != SetType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[source]; !ok {
+		return 0, nil
+	}
+
+	if _, ok := s.SetKV[destination]; !ok {
+		s.SetKV[destination] = make(map[string]struct{})
+		s.KeyType[destination] = SetType
+	}
+
+	if _, ok := s.SetKV[source][value]; ok {
+		delete(s.SetKV[source], value)
+		s.SetKV[destination][value] = struct{}{}
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func (s *InMemoryStore) SPop(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != SetType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.SetKV[key]; !ok {
+		return "", nil
+	}
+
+	for element := range s.SetKV[key] {
+		delete(s.SetKV[key], element)
+		if len(s.SetKV[key]) == 0 {
+			delete(s.SetKV, key)
+			delete(s.KeyType, key)
+		}
+		return element, nil
+	}
+	return "", nil
+}
+
+func (s *InMemoryStore) HSet(key string, field string, value string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != HashType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.HashSetKV[key]; !ok {
+		s.HashSetKV[key] = make(map[string]string)
+		s.KeyType[key] = HashType
+		s.HashSetKV[key][field] = value
+		return 1, nil
+	}
+
+	s.HashSetKV[key][field] = value
+	return 0, nil
+}
+
+func (s *InMemoryStore) HGet(key string, field string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != HashType {
+		return "", errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.HashSetKV[key]; !ok {
+		return "", nil
+	}
+
+	value, ok := s.HashSetKV[key][field]
+	if !ok {
+		return "", nil
+	}
+	return value, nil
 }
 
 func (s *InMemoryStore) BackgroundKeyCleanup(sleepTime time.Duration) {

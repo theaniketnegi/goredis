@@ -919,13 +919,13 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			destKey := args[1]
 			member := args[2]
 
-			retunedVal, err := store.SMove(srcKey, destKey, member)
+			returnedVal, err := store.SMove(srcKey, destKey, member)
 
 			if err != nil {
 				conn.Write([]byte(err.Error() + "\r\n"))
 				continue
 			}
-			conn.Write(fmt.Appendf(nil, ":%d\r\n", retunedVal))
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", returnedVal))
 		case "SPOP":
 			if len(args) < 1 || len(args) > 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'spop' command\r\n"))

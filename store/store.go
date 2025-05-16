@@ -912,6 +912,140 @@ func (s *InMemoryStore) HGet(key string, field string) (string, error) {
 	return value, nil
 }
 
+func (s *InMemoryStore) HIncrBy(key string, field string, by int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != HashType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.HashSetKV[key]; !ok {
+		s.HashSetKV[key] = make(map[string]string)
+		s.KeyType[key] = HashType
+		s.HashSetKV[key][field] = fmt.Sprintf("%d", by)
+		return by, nil
+	}
+
+	value, err := strconv.ParseInt(s.HashSetKV[key][field], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("-ERR value is not an integer or out of range")
+	}
+
+	if (by > 0 && value > math.MaxInt64-by) || (by < 0 && value < math.MinInt64-by) {
+		return 0, fmt.Errorf("-ERR increment or decrement would overflow")
+	}
+
+	value += by
+	s.HashSetKV[key][field] = fmt.Sprintf("%d", value)
+	return value, nil
+}
+
+func (s *InMemoryStore) HExists(key string, field string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != HashType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.HashSetKV[key]; !ok {
+		return 0, nil
+	}
+
+	if _, ok := s.HashSetKV[key][field]; ok {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func (s *InMemoryStore) HDel(key string, fields []string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != HashType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.HashSetKV[key]; !ok {
+		return 0, nil
+	}
+
+	count := 0
+	for _, field := range fields {
+		if _, ok := s.HashSetKV[key][field]; ok {
+			delete(s.HashSetKV[key], field)
+			count++
+		}
+	}
+
+	if len(s.HashSetKV[key]) == 0 {
+		delete(s.HashSetKV, key)
+		delete(s.KeyType, key)
+	}
+
+	return count, nil
+}
+
+func (s *InMemoryStore) HKeys(key string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != HashType {
+		return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.HashSetKV[key]; !ok {
+		return nil, nil
+	}
+
+	var keys []string
+	for field := range s.HashSetKV[key] {
+		keys = append(keys, field)
+	}
+	return keys, nil
+}
+
+func (s *InMemoryStore) HVals(key string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != HashType {
+		return nil, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.HashSetKV[key]; !ok {
+		return nil, nil
+	}
+
+	var values []string
+	for _, value := range s.HashSetKV[key] {
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func (s *InMemoryStore) HLen(key string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keyType, ok := s.KeyType[key]
+	if ok && keyType != HashType {
+		return 0, errors.New("-WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	if _, ok := s.HashSetKV[key]; !ok {
+		return 0, nil
+	}
+
+	return len(s.HashSetKV[key]), nil
+}
+
 func (s *InMemoryStore) BackgroundKeyCleanup(sleepTime time.Duration) {
 	go func() {
 		for {

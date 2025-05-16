@@ -1049,6 +1049,117 @@ func connectionHandler(conn net.Conn, store *store.InMemoryStore, persistence *s
 			conn.Write([]byte(resp.String()))
 		func_exit_hmget:
 			continue
+		case "HINCRBY":
+			if len(args) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hincrby' command\r\n"))
+				continue
+			}
+			key := args[0]
+			field := args[1]
+			by, err := strconv.Atoi(args[2])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			val, err := store.HIncrBy(key, field, int64(by))
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "HDECRBY":
+			if len(args) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hdecrby' command\r\n"))
+				continue
+			}
+			key := args[0]
+			field := args[1]
+			by, err := strconv.Atoi(args[2])
+			if err != nil {
+				conn.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+				continue
+			}
+			val, err := store.HIncrBy(key, field, -int64(by))
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", val))
+		case "HEXISTS":
+			if len(args) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hexists' command\r\n"))
+				continue
+			}
+			key := args[0]
+			field := args[1]
+			returnedVal, err := store.HExists(key, field)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", returnedVal))
+		case "HDEL":
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hdel' command\r\n"))
+				continue
+			}
+			key := args[0]
+			removedFields, err := store.HDel(key, args[1:])
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", removedFields))
+		case "HKEYS":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hkeys' command\r\n"))
+				continue
+			}
+			key := args[0]
+			keys, err := store.HKeys(key)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(keys)))
+			for _, val := range keys {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+
+		case "HVALS":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hvals' command\r\n"))
+				continue
+			}
+			key := args[0]
+			values, err := store.HVals(key)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+
+			var resp strings.Builder
+			resp.WriteString(fmt.Sprintf("*%d\r\n", len(values)))
+			for _, val := range values {
+				resp.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(val), val))
+			}
+			conn.Write([]byte(resp.String()))
+
+		case "HLEN":
+			if len(args) != 1 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'hlen' command\r\n"))
+				continue
+			}
+			key := args[0]
+			length, err := store.HLen(key)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\r\n"))
+				continue
+			}
+			conn.Write(fmt.Appendf(nil, ":%d\r\n", length))
+
 		default:
 			conn.Write([]byte("-ERR unknown command '" + strings.ToLower(command) + "', with args beginning with: " + strings.Join(args, " ") + "\r\n"))
 		}
